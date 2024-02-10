@@ -811,7 +811,11 @@ inline at::Device toDevice(PyObject* obj) {
   }
   if (THPUtils_checkLong(obj)) {
     const auto device_index = THPUtils_unpackLong(obj);
-    TORCH_CHECK(device_index >= 0, "Device index must not be negative");
+    TORCH_CHECK(
+        device_index >= 0 && device_index < c10::Device::MAX_NUM_DEVICES,
+        "Device index must be between 0 and ",
+        c10::Device::MAX_NUM_DEVICES - 1,
+        " inclusively.");
     return at::Device(
         at::getAccelerator(true).value(),
         static_cast<c10::DeviceIndex>(device_index));
