@@ -141,6 +141,7 @@ class Library:
         assert callable(impl_fn)
         assert op_name.find("::") > 0, (f"Invalid format: ${op_name}. Please ensure the operation to be registered "
                                         "follows the pattern: ${{name_space}}::${{op_name}}.${{overload_name}}.")
+
         op_name_with_overload = op_name.split("::")[-1]
         if op_overload_name:
             op_name_with_overload = op_name_with_overload + "." + op_overload_name

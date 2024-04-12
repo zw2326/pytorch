@@ -357,6 +357,13 @@ void initDispatchBindings(PyObject* module) {
               }
             }
             auto& lib = self.cast<torch::Library&>();
+            std::string str_op_name(op_name);
+            if (op_overload_name != nullptr) {
+              std::string str_op_overload_name(op_overload_name);
+              if (!str_op_overload_name.empty()) {
+                str_op_name.append(".").append(str_op_overload_name);
+              }
+            }
             lib.impl(
                 str_op_name.c_str(),
                 torch::dispatch(

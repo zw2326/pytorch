@@ -3,6 +3,8 @@
 
 #include <ATen/ATen.h>
 
+#include <torch/csrc/dynamo/guards.h>
+#include <torch/csrc/inductor/aoti_eager/kernel_meta_info.h>
 #include <torch/csrc/inductor/aoti_runner/model_container_runner.h>
 #include <torch/csrc/utils/pybind.h>
 
@@ -12,6 +14,11 @@
 
 namespace torch::inductor {
 
+struct AOTIKernelState {
+  std::shared_ptr<AOTIModelContainerRunner> kernel_runner_;
+  std::vector<TensorCheck> tensor_checks_;
+};
+
 class AOTIPythonKernelHolder : public c10::OperatorKernel {
   torch::impl::dispatch::PythonKernelHolder python_kernel_holder_;
   c10::DispatchKey dispatch_key_;
@@ -20,8 +27,12 @@ class AOTIPythonKernelHolder : public c10::OperatorKernel {
   std::string op_overload_name_;
   bool is_symbolic_;
   bool is_fall_back_;
-  c10::optional<c10::Device> device_opt_;
+  c10::Device device_;
   c10::impl::PyInterpreter* pyinterpreter_;
+
+  std::
+      unordered_map<AOTIKernelMetaInfo, AOTIKernelState, AOTIKernelMetaInfoHash>
+          aoti_kernel_cache_;
 
  public:
   AOTIPythonKernelHolder(
@@ -40,20 +51,26 @@ class AOTIPythonKernelHolder : public c10::OperatorKernel {
  private:
   bool detect_cache(
       const c10::OperatorHandle& op,
-      c10::DispatchKeySet keyset,
-      torch::jit::Stack* stack);
+      const c10::DispatchKeySet& keyset,
+      const torch::jit::Stack* stack,
+      AOTIKernelState& kernel_state);
   void cache_miss(
       const c10::OperatorHandle& op,
-      c10::DispatchKeySet keyset,
+      const c10::DispatchKeySet& keyset,
       torch::jit::Stack* stack);
   void cache_hit(
+      const AOTIKernelState& kernel_state,
       const c10::OperatorHandle& op,
-      c10::DispatchKeySet keyset,
+      const c10::DispatchKeySet& keyset,
       torch::jit::Stack* stack);
-  std::string produce_aot_kernel_lib(
+  std::string produce_aoti_kernel_lib(
       const c10::OperatorHandle& op,
-      c10::DispatchKeySet keyset,
-      torch::jit::Stack* stack);
+      const c10::DispatchKeySet& keyset,
+      const torch::jit::Stack* stack);
+  void init_aoti_kernel_cache();
+  AOTIKernelMetaInfo get_inputs_meta_info(const std::vector<at::Tensor>&);
+  std::shared_ptr<AOTIModelContainerRunner> load_aoti_model_runner(
+      const std::string&);
 };
 
 } // namespace torch::inductor
