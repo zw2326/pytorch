@@ -137,16 +137,17 @@ class OptimizedModule(torch.nn.Module):
 
     def _initialize(self):
         # Do this stuff in constructor to lower overhead slightly
-        if isinstance(self._orig_mod.forward, types.MethodType) and trace_rules.check(
-            self._orig_mod.forward
-        ):
-            # This may be a torch.nn.* instance in trace_rules.py which
-            # won't trigger a frame evaluation workaround to add an extra
-            # frame we can capture
-            self.forward = self.dynamo_ctx(external_utils.wrap_inline(self._orig_mod))
-        else:
-            # Invoke hooks outside of dynamo then pickup the inner frame
-            self.forward = self.dynamo_ctx(self._orig_mod.__call__)
+
+        # Important consideration: Currently, Dynamo intentionally skips the
+        # __call__ (or _wrapped_call_impl) function in
+        # torch/nn/modules/module.py. This is to prevent continual recompilation
+        # of _wrapped_call_impl, as all nn modules pass through this function.
+        # To circumvent this issue, we introduce an extra frame that is not
+        # ignored by the trace_rules infrastructure (via
+        # external_utils.wrap_inline).
+
+        # Wrap the __call__ method so that hooks are also inlined.
+        self.forward = self.dynamo_ctx(external_utils.wrap_inline(self._orig_mod))
 
         if hasattr(self._orig_mod, "_initialize_hook"):
             self._forward = self.forward
