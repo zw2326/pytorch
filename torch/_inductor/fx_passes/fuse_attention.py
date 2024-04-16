@@ -520,11 +520,11 @@ def _sfdp_pattern_19(
     dropout_p,
 ):
     # UINT8 QUANTIZED SDPA
-    q = query.permute(0, 2, 1, 3)
+    q = query.permute([0, 2, 1, 3])
     q = (q.float() - q_zp) * q_scale
-    k = key.permute(0, 2, 1, 3).transpose(-2, -1)
+    k = key.permute([0, 2, 1, 3]).transpose(-2, -1)
     k = (k.float() - k_zp) * k_scale
-    v = value.permute(0, 2, 1, 3)
+    v = value.permute([0, 2, 1, 3])
     v = (v.float() - v_zp) * v_scale
     a = torch.nn.functional.dropout(
         (torch.matmul(q, k).div(inv_scale) + attn_mask).softmax(dim=-1),
@@ -555,6 +555,7 @@ def _sfdp_replacement_19(
     dropout_p,
 ):
     counters["inductor"]["fuse_attention"] += 1
+    # TODO: support UINT8 SDPA kernel
     output = aten.scaled_dot_product_attention(
         (query.transpose(1, 2).float() - q_zp) * q_scale,
         (key.transpose(1, 2).float() - k_zp) * k_scale,

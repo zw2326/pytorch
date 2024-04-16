@@ -839,7 +839,7 @@ class TestSDPAPatternRewriterTemplate(TestCase):
                     self.attention_head_size,
                 )
                 x = x.view(new_x_shape)
-                return x.permute(0, 2, 1, 3)
+                return x.permute([0, 2, 1, 3])
 
             def forward(self, x, mask):
                 q = self.q_proj(x)
