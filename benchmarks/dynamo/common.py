@@ -2695,8 +2695,21 @@ class BenchmarkRunner:
             if tag is not None:
                 experiment_kwargs["tag"] = tag
             results = []
+
+            if self.args.compiled_autograd:
+                before = torch.backends.cudnn.benchmark
+                torch.backends.cudnn.benchmark = False
+
             eager_latency, eager_peak_mem, _ = warmup(
-                self.model_iter_fn, model, example_inputs, "eager"
+                self.model_iter_fn, model, example_inputs, "eager", niters=4
+            )
+
+            if self.args.compiled_autograd:
+                torch.backends.cudnn.benchmark = before
+
+            # warmup with cudnn benchmark
+            warmup(
+                self.model_iter_fn, model, example_inputs, "eager", niters=1
             )
 
             if self.args.export_aot_inductor:
@@ -2709,8 +2722,20 @@ class BenchmarkRunner:
                 aot_compilation_time = 0
 
             with maybe_enable_compiled_autograd(self.args.compiled_autograd):
+                if self.args.compiled_autograd:
+                    before = torch.backends.cudnn.benchmark
+                    torch.backends.cudnn.benchmark = False
+
                 dynamo_latency, dynamo_peak_mem, dynamo_stats = warmup(
-                    optimized_model_iter_fn, model, example_inputs, "dynamo"
+                    optimized_model_iter_fn, model, example_inputs, "dynamo", niters=4
+                )
+
+                if self.args.compiled_autograd:
+                    torch.backends.cudnn.benchmark = before
+
+                # warmup with cudnn benchmark
+                warmup(
+                    optimized_model_iter_fn, model, example_inputs, "dynamo", niters=1
                 )
 
             if self.args.profile_dynamo_cache_lookup:
@@ -3261,6 +3286,7 @@ def parse_args(args=None):
         "--compiled-autograd",
         action="store_true",
         help="Enables compiled autograd on compiled benchmark",
+        default=True,
     )
 
     parser.add_argument(
