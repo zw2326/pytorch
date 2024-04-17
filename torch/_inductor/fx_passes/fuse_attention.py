@@ -517,6 +517,8 @@ def _sfdp_pattern_19(
     a_zp,
     a_scale,
     a_inv_scale,
+    o_zp,
+    o_inv_scale,
     dropout_p,
 ):
     # UINT8 QUANTIZED SDPA
@@ -534,7 +536,11 @@ def _sfdp_pattern_19(
         torch.clamp_min(torch.round(a * a_inv_scale) + a_zp, 0), 255
     ).to(torch.uint8)
     a = (qa.float() - a_zp) * a_scale
-    return a.matmul(v)
+    o = a.matmul(v)
+    o = o.permute(0, 2, 1, 3).contiguous()
+    return torch.clamp_max(
+        torch.clamp_min(torch.round(o * o_inv_scale) + o_zp, 0), 255
+    ).to(torch.uint8)
 
 
 def _sfdp_replacement_19(
@@ -552,6 +558,8 @@ def _sfdp_replacement_19(
     a_zp,
     a_scale,
     a_inv_scale,
+    o_zp,
+    o_inv_scale,
     dropout_p,
 ):
     counters["inductor"]["fuse_attention"] += 1
@@ -565,7 +573,10 @@ def _sfdp_replacement_19(
         is_causal=False,
         scale=1.0 / inv_scale,
     )
-    return output
+    output = torch.clamp_max(
+        torch.clamp_min(torch.round(output * o_inv_scale) + o_zp, 0), 255
+    ).to(torch.uint8)
+    return output.transpose(1, 2).contiguous()
 
 
 def _sfdp_params_check(match):
@@ -887,6 +898,8 @@ def _get_sfdp_patterns():
                         scale(),
                         zp(),
                         scale(),
+                        scale(),
+                        zp(),
                         scale(),
                     ],
                     d,
