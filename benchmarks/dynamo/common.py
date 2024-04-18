@@ -3191,6 +3191,7 @@ def parse_args(args=None):
         "--use_warm_peak_memory",
         action="store_true",
         help="Measure peak memory using a warm run to reduce autotuning noise",
+        default=True,
     )
     parser.add_argument(
         "--print-memory",
@@ -3309,6 +3310,7 @@ def parse_args(args=None):
         "--compiled-autograd",
         action="store_true",
         help="Enables compiled autograd on compiled benchmark",
+        default=True,
     )
 
     parser.add_argument(
