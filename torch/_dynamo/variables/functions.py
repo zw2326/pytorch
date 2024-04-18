@@ -289,7 +289,6 @@ class UserFunctionVariable(BaseUserFunctionVariable):
             return invoke_and_store_as_constant(
                 tx, self.fn, self.get_name(), args, kwargs
             )
-
         return super().call_function(tx, args, kwargs)
 
 
