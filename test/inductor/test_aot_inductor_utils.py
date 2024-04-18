@@ -51,6 +51,8 @@ class AOTIRunnerUtil:
 
         with torch.no_grad():
             so_path = torch._inductor.aot_compile(gm, example_inputs, options=options)  # type: ignore[arg-type]
+            print(f"{so_path[:-3]}.cpp")
+            breakpoint()
 
         return so_path
 
