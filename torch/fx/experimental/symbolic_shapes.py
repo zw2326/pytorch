@@ -2029,6 +2029,8 @@ class ShapeEnv:
         # Set that holds "size-like" symbols.  When we perform
         # "size-oblivious" tests, these can be assumed to be >= 2.
         self.size_like: Set[sympy.Symbol] = set()
+        # torch._check_is_size processing could be expensive: memoizing exprs it was already called to skip repetetive calls.
+        self.check_is_size_called: Set[sympy.Expr] = set()
         # Duck-shaping says that if two input tensors have the same size,
         # they get assigned the same symbolic variable
         self.val_to_var: Dict[int, sympy.Expr] = {}
@@ -2163,6 +2165,7 @@ class ShapeEnv:
             "source_name_to_debug_name",
             "_prev_cache_key",
             "_version_counter",
+            "check_is_size_called",
         )
 
         # Mapping of the value of each to-be-compared field into the values that
