@@ -31,7 +31,7 @@ def fully_shard(
     mesh: Optional[DeviceMesh] = None,
     reshard_after_forward: Union[bool, int] = True,
     mp_policy: MixedPrecisionPolicy = MixedPrecisionPolicy(),
-    process_group: Optional[dist.ProcessGroup] = None
+    process_group: Optional[torch.distributed.ProcessGroup] = None
 ):
     """
     Shard module parameters across data parallel workers.
