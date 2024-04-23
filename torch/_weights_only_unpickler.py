@@ -64,6 +64,15 @@ from typing import Any, Dict, List
 
 import torch
 
+try:
+    import numpy as np
+    HAS_NUMPY = True
+except ModuleNotFoundError:
+    np = None  # type: ignore[assignment]
+
+if HAS_NUMPY:
+    import _codecs
+
 
 # Unpickling machinery
 @_functools.lru_cache(maxsize=1)
@@ -77,22 +86,9 @@ def _get_allowed_globals():
         "torch.Tensor": torch.Tensor,
     }
     # dtype
-    for t in [
-        torch.complex32,
-        torch.complex64,
-        torch.complex128,
-        torch.float8_e5m2,
-        torch.float8_e4m3fn,
-        torch.float8_e5m2fnuz,
-        torch.float8_e4m3fnuz,
-        torch.float16,
-        torch.float32,
-        torch.float64,
-        torch.int8,
-        torch.int16,
-        torch.int32,
-        torch.int64,
-    ]:
+    for t in torch.storage._dtype_to_storage_type_map().keys():
+        rc[str(t)] = t
+    for t in torch.storage._new_dtypes():
         rc[str(t)] = t
     # Tensor classes
     for tt in torch._tensor_classes:
@@ -115,13 +111,61 @@ def _get_allowed_globals():
         torch._utils._rebuild_sparse_tensor,
         torch._utils._rebuild_meta_tensor_no_storage,
         torch._utils._rebuild_nested_tensor,
+        torch._utils._rebuild_device_tensor_from_numpy,
     ]:
         rc[f"torch._utils.{f.__name__}"] = f
+
+    # numpy (for _rebuild_device_tensor_from_numpy)
+    if HAS_NUMPY:
+        for f in [
+            np.core.multiarray._reconstruct,
+            np.ndarray,
+            np.dtype,
+            _codecs.encode,
+        ]:
+            rc[f"{f.__module__}.{f.__name__}"] = f
 
     # Handles Tensor Subclasses, Tensor's with attributes.
     # NOTE: It calls into above rebuild functions for regular Tensor types.
     rc["torch._tensor._rebuild_from_type_v2"] = torch._tensor._rebuild_from_type_v2
     return rc
+
+
+# for _rebuild_device_tensor_from_numpy
+def _get_allowed_numpy_rebuild_types():
+    if HAS_NUMPY:
+        return [
+            np.ndarray,
+            np.dtypes.BoolDType,
+            np.dtypes.ByteDType,
+            np.dtypes.BytesDType,
+            np.dtypes.CLongDoubleDType,
+            np.dtypes.Complex128DType,
+            np.dtypes.Complex64DType,
+            np.dtypes.Float16DType,
+            np.dtypes.Float32DType,
+            np.dtypes.Float64DType,
+            np.dtypes.Int16DType,
+            np.dtypes.Int32DType,
+            np.dtypes.Int64DType,
+            np.dtypes.Int8DType,
+            np.dtypes.IntDType,
+            np.dtypes.LongDType,
+            np.dtypes.LongDoubleDType,
+            np.dtypes.LongLongDType,
+            np.dtypes.ShortDType,
+            np.dtypes.UByteDType,
+            np.dtypes.UInt16DType,
+            np.dtypes.UInt32DType,
+            np.dtypes.UInt64DType,
+            np.dtypes.UInt8DType,
+            np.dtypes.UIntDType,
+            np.dtypes.ULongDType,
+            np.dtypes.ULongLongDType,
+            np.dtypes.UShortDType,
+            np.dtypes.VoidDType,
+        ]
+    return []
 
 
 class Unpickler:
@@ -179,6 +223,8 @@ class Unpickler:
                     inst.__setstate__(state)
                 elif type(inst) is OrderedDict:
                     inst.__dict__.update(state)
+                elif type(inst) in _get_allowed_numpy_rebuild_types():
+                    inst.__setstate__(state)
                 else:
                     raise RuntimeError(
                         f"Can only build Tensor, parameter or dict objects, but got {type(inst)}"

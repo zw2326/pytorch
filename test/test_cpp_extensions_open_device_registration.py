@@ -4,15 +4,22 @@ import os
 import shutil
 import sys
 import tempfile
-import unittest
 import types
+import unittest
 from typing import Union
+from unittest.mock import patch
 
 import torch
 
 import torch.testing._internal.common_utils as common
 import torch.utils.cpp_extension
-from torch.testing._internal.common_utils import IS_ARM64, TEST_CUDA
+from torch.testing._internal.common_dtype import all_types_and_complex_and
+from torch.testing._internal.common_utils import (
+    instantiate_parametrized_tests,
+    IS_ARM64,
+    parametrize,
+    TEST_CUDA,
+)
 from torch.utils.cpp_extension import CUDA_HOME, ROCM_HOME
 
 
@@ -544,6 +551,38 @@ class TestCppExtensionOpenRgistration(common.TestCase):
         self.assertEqual(z_cpu, z[0])
         self.assertEqual(z_cpu, z[1])
 
+    # FIXME: bfloat16 is failing due to https://github.com/pytorch/pytorch/blob/main/test/cpp_extensions/open_registration_extension.cpp?fbclid=IwAR2wOJYMX2tvKldsXFLeNYlLYaatmj0ts6nx09mxjt4Wr8DJbcWAiRfXZq0#L349
+    @parametrize('dtype', all_types_and_complex_and(torch.half, torch.bool))
+    def test_open_device_numpy_serialization(self, dtype):
+        torch.utils.rename_privateuse1_backend("foo")
+        device = self.module.custom_device()
+        default_protocol = torch.serialization.DEFAULT_PROTOCOL
+        # This is a hack to test serialization through numpy
+        with patch.object(torch._C, "_has_storage", return_value=False):
+            if dtype.is_floating_point or dtype.is_complex:
+                x = torch.randn(2, 3, dtype=dtype)
+            elif dtype == torch.bool:
+                x = torch.randn(2, 3) > 0.5
+            else:
+                info = torch.iinfo(dtype)
+                x = torch.randint(info.min, info.max, (2, 3), dtype=dtype)
+            x_foo = x.to(device)
+            sd = {"x": x_foo}
+            rebuild_func = x_foo._reduce_ex_internal(default_protocol)[0]
+            self.assertTrue(
+                rebuild_func is torch._utils._rebuild_device_tensor_from_numpy
+            )
+            with tempfile.NamedTemporaryFile() as f:
+                torch.save(sd, f)
+                f.seek(0)
+                sd_loaded = torch.load(f, weights_only=False)
+                self.assertEqual(sd_loaded["x"], x)
+                f.seek(0)
+                sd_loaded = torch.load(f, weights_only=True)
+                self.assertEqual(sd_loaded["x"], x)
+
+
+instantiate_parametrized_tests(TestCppExtensionOpenRgistration)
 
 if __name__ == "__main__":
     common.run_tests()
