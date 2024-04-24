@@ -5,7 +5,7 @@ from typing import Any, cast, Dict, List, NamedTuple, Optional, Set, Tuple, Unio
 import torch
 import torch.distributed as dist
 import torch.nn as nn
-
+import logging
 from torch.autograd.graph import Node
 from torch.distributed.fsdp._common_utils import _named_parameters_with_duplicates
 from torch.utils._pytree import tree_flatten, tree_unflatten
@@ -19,9 +19,8 @@ from ._fsdp_collectives import (
 )
 from ._fsdp_common import FSDPMeshInfo, HSDPMeshInfo, TrainingState
 from ._fsdp_param import FSDPParam, ParamModuleInfo, ShardedState
-
 _ModuleToHandleDict = Dict[nn.Module, RemovableHandle]  # for state dict
-
+import traceback
 
 """
 [Note: Overlapping all-gather copy-in and all-gather]
@@ -140,6 +139,8 @@ class FSDPParamGroup:
         # different world size, which should be waited on in the next unshard
         self._reshard_after_forward_event: Optional[torch.cuda.Event] = None
 
+        self.release_all_gather_output = False
+
     # Initialization #
     def _init_mp_dtypes(self) -> None:
         for fsdp_param in self.fsdp_params:
@@ -207,6 +208,7 @@ class FSDPParamGroup:
 
     # Runtime #
     def unshard(self, async_op: bool = False):
+#         logging.info("DLDEBUG model._module_fqn=%s, self.device=%s,self.module=%s, FSDPParamGroup unshard start", self._module_fqn, self.device, id(self.module))
         if self._all_gather_result is not None:  # already called, pending wait
             return
         if self.is_unsharded:
@@ -216,6 +218,7 @@ class FSDPParamGroup:
             # used in the all-gather streams
             self._wait_all_gather_streams_on_event(self._reshard_after_forward_event)
             self._reshard_after_forward_event = None
+#         logging.info("DLDEBUG FSDPParamGroup unshard for_each_all_gather start: a_g_group=%s", self._all_gather_process_group)
         self._all_gather_result = foreach_all_gather(
             self.fsdp_params,
             self._all_gather_process_group,
@@ -223,6 +226,7 @@ class FSDPParamGroup:
             *self.comm_ctx.get_all_gather_streams(self._training_state),
             self.device,
         )
+#         logging.info("DLDEBUG model._module_fqn=%s,  self.device=%s,self.module=%s, FSDPParamGroup unshard done", self._module_fqn, self.device,  id(self.module))
 
     def wait_for_unshard(self):
         """
@@ -260,6 +264,7 @@ class FSDPParamGroup:
         self.comm_ctx.all_gather_stream.wait_event(event)
 
     def reshard(self):
+#         logging.info("DLDEBUG: model._module_fqn=%s,  self.device=%s,self.module=%s, pram_group.reshard , state=%s, self._reshard_after_forward =%s",self._module_fqn, self.device,  id(self.module), self._training_state, self._reshard_after_forward )
         if self._training_state == TrainingState.FORWARD:
             if not self._reshard_after_forward:
                 return
@@ -268,6 +273,8 @@ class FSDPParamGroup:
                 self._reshard_after_forward_event = torch.cuda.Event()
                 self._reshard_after_forward_event.record()
                 return
+        # if not self.release_all_gather_output:
+        #     return
         self._to_sharded()
 
     def pre_forward(
@@ -278,6 +285,7 @@ class FSDPParamGroup:
             self.unshard()
             self.wait_for_unshard()
             args, kwargs = self._register_post_backward_hook(args, kwargs)
+#             logging.info("DLDEBUG FSDPParamGroup pre_forward done")
             return args, kwargs
 
     def post_forward(self, module: nn.Module, input: Any, output: Any):
@@ -285,6 +293,7 @@ class FSDPParamGroup:
             self.reshard()
             self._record_post_forward()
             self._training_state = TrainingState.IDLE
+#             logging.info("DLDEBUG FSDPParamGroup post_forward done")
             return output
 
     def _record_post_forward(self) -> None:
@@ -293,8 +302,11 @@ class FSDPParamGroup:
         post_forward_index = len(self.comm_ctx.post_forward_order)
         self.comm_ctx.post_forward_order.append(self)
         self._post_forward_indices.append(post_forward_index)
+#         logging.info("DLDEBUG FSDPParamGroup record_post_forward done")
 
     def pre_backward(self, forward_grad_fns: Tuple[Any, ...], *unused: Any):
+#         logging.info("DLDEBUG: model._module_fqn =%s,  self.device=%s,self.module=%s, pre_backward", self._module_fqn, self.device,  id(self.module))
+#        traceback.print_stack()
         with torch.profiler.record_function("FSDP::pre_backward"):
             self._training_state = TrainingState.PRE_BACKWARD
             self.unshard()  # no-op if prefetched
@@ -302,13 +314,19 @@ class FSDPParamGroup:
             # Can be already removed if running multiple `backward`s
             self.all_forward_output_grad_fns.discard(forward_grad_fns)
             self._prefetch_unshard()
+#             logging.info("DLDEBUG FSDPParamGroup pre_backward done")
 
     def post_backward(self, *unused: Any):
         self._training_state = TrainingState.POST_BACKWARD
+#         logging.info("DLDEBUG: model._module_fqn=%s,  self.device=%s,self.module=%s, pram_group.post_backward, self.reduce_grads=%s", self._module_fqn , self.device,  id(self.module), self.reduce_grads)
+#        traceback.print_stack()
         with torch.profiler.record_function("FSDP::post_backward_reshard"):
             if not self.reduce_grads:
-                self.reshard()
-                return
+                if not self.release_all_gather_output:
+                    return
+                else:
+                    self.reshard()
+                    return
             # Save the autograd-computed gradients before resharding to only
             # access the unsharded parameters when their data is present
             fsdp_params_with_grad: List[FSDPParam] = []
@@ -336,6 +354,7 @@ class FSDPParamGroup:
                 else None,
                 self.comm_ctx.all_reduce_stream,
             )
+#             logging.info("DLDEBUG FSDPParamGroup post_backward done")
 
     def finalize_backward(self):
         if self._post_reduce_view_out_event is not None:
@@ -368,6 +387,7 @@ class FSDPParamGroup:
 
     # Utilities #
     def _to_sharded(self):
+#         logging.info("DLDEBUG: model._module_fqn=%s,  self.device=%s,self.module=%s, _to_sharded",self._module_fqn , self.device,  id(self.module) )
         if not self.is_sharded:
             for fsdp_param in self.fsdp_params:
                 fsdp_param.to_sharded()

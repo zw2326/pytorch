@@ -17,7 +17,7 @@ class AllGatherResult(NamedTuple):
     all_gather_work: Optional[dist.distributed_c10d.Work]
     all_gather_input_numels: List[int]
 
-
+import logging
 @torch.no_grad()
 def foreach_all_gather(
     fsdp_params: List[FSDPParam],
@@ -28,11 +28,13 @@ def foreach_all_gather(
     device: torch.device,
 ) -> Optional[AllGatherResult]:
     world_size, rank = group.size(), group.rank()
+#     logging.info("DLDEBUG foreach_all_gather world_size=%s, rank=%s", world_size, rank)
     # - Copy in
     with torch.cuda.stream(all_gather_copy_in_stream):
         param_all_gather_inputs = [
             fsdp_param.all_gather_input for fsdp_param in fsdp_params
         ]
+#         logging.info("DLDEBUG: param_all_gather_inputs=%s", [t.device for t in param_all_gather_inputs])
         dtype = param_all_gather_inputs[0].dtype
         if not all(t.dtype == dtype for t in param_all_gather_inputs):
             raise NotImplementedError(
@@ -49,7 +51,22 @@ def foreach_all_gather(
         foreach_copy_dsts = torch.split(all_gather_input, inp_split_sizes)
         torch._foreach_copy_(foreach_copy_dsts, param_all_gather_inputs)
         del param_all_gather_inputs
+#     logging.info("DLDEBUG foreach_all_gather copy_in_stream kicked out")
     all_gather_stream.wait_stream(all_gather_copy_in_stream)
+#     logging.info("DLDEBUG foreach_all_gather copy_in_stream done")
+
+    # Assume that we have 4 processes, each with a tensor
+    # tensor_d  = torch.tensor([rank]).float()  # rank is the rank of the current process
+    # tensor_d = tensor_d.to('cuda')
+    # # All gather into a single tensor
+    # result_d = torch.empty(world_size, dtype=torch.float32, device=device)
+
+    # dist.all_gather_into_tensor(result_d, tensor_d, group=group)
+#     # logging.info("DLDEBUG: result_d=%s", result_d)
+
+    # torch.distributed.barrier()
+#     # logging.info("DLDEBUG foreach_all_gather all_gather_stream kicked out")
+
     with torch.cuda.stream(all_gather_stream):
         # - All-gather
         all_gather_work = dist.all_gather_into_tensor(
@@ -59,6 +76,7 @@ def foreach_all_gather(
             async_op=async_op,
         )
         all_gather_event = all_gather_stream.record_event()
+#         logging.info("DLDEBUG foreach_all_gather all_gather_stream done")
         return AllGatherResult(
             all_gather_output, all_gather_event, all_gather_work, inp_split_sizes
         )

@@ -11,6 +11,7 @@ import torch.nn as nn
 from torch.distributed._composable.contract import _get_registry
 from torch.distributed._tensor import DeviceMesh, DTensor, Placement
 
+import logging
 
 @dataclass
 class DataParallelMeshInfo:
@@ -32,6 +33,7 @@ class FSDPMeshInfo(DataParallelMeshInfo):
         if self.shard_mesh_dim is None:
             raise AssertionError("Expects non-None shard_mesh_dim")
         self.shard_mesh_size: int = self.mesh.size(self.shard_mesh_dim)
+        # logging.info("DLDEBUG fg: = %s, self.mesh=%s", dist.ProcessGroup.__dict__, self.mesh)
         self.shard_process_group = cast(
             dist.ProcessGroup, self.mesh.get_group(self.shard_mesh_dim)
         )

@@ -19,6 +19,24 @@ from ._fsdp_common import _cast_fp_tensor, TrainingState
 from ._fsdp_param import FSDPParam
 from ._fsdp_param_group import FSDPCommContext, FSDPParamGroup
 
+import pdb
+import sys
+import logging
+
+class ForkedPdb(pdb.Pdb):
+    """
+    PDB Subclass for debugging multi-processed code
+    Suggested in: https://stackoverflow.com/questions/4716533/how-to-attach-debugger-to-a-python-subproccess
+    """
+    def interaction(self, *args, **kwargs):
+        _stdin = sys.stdin
+        try:
+            sys.stdin = open('/dev/stdin')
+            pdb.Pdb.interaction(self, *args, **kwargs)
+        finally:
+            sys.stdin = _stdin
+
+
 
 class FSDPStateContext:
     """This has state shared across FSDP states."""
@@ -60,7 +78,7 @@ class FSDPState(_State):
         self._post_forward_hook_handle = module.register_forward_hook(
             self._post_forward, prepend=False
         )
-
+#         logging.info("DLDEBUG FSDPState init done")
     def _root_pre_forward(
         self, module: nn.Module, args: Tuple[Any, ...], kwargs: Dict[str, Any]
     ) -> Tuple[Tuple[Any, ...], Dict[str, Any]]:
@@ -79,6 +97,7 @@ class FSDPState(_State):
                         args, kwargs, self._device, False
                     )  # same as DDP
                 args, kwargs = args_tuple[0], kwargs_tuple[0]
+#         logging.info("DLDEBUG FSDPState root_pre_forward done")
         return args, kwargs
 
     def _lazy_init(self) -> None:
@@ -115,7 +134,7 @@ class FSDPState(_State):
         for state in self._state_ctx.all_states:
             if state._fsdp_param_group:
                 state._fsdp_param_group.lazy_init()
-
+#         logging.info("DLDEBUG FSDPState lazy init done")
     def _init_shared_state(self) -> None:
         self._comm_ctx.init()
         for state in self._state_ctx.all_states:
@@ -159,6 +178,7 @@ class FSDPState(_State):
                 args, kwargs = tree_map(cast_fn, args), tree_map(cast_fn, kwargs)
         if self._fsdp_param_group:
             args, kwargs = self._fsdp_param_group.pre_forward(module, args, kwargs)
+#         logging.info("DLDEBUG FSDPState _pre_forward done")
         return args, kwargs
 
     def _post_forward(self, module: nn.Module, input: Any, output: Any) -> Any:
@@ -168,6 +188,7 @@ class FSDPState(_State):
             return output
         if self._fsdp_param_group:
             output = self._fsdp_param_group.post_forward(module, input, output)
+#         logging.info("DLDEBUG: state._post_forward on module=%s", id(module))
         output = self._register_pre_backward_hook(output)
         self._training_state = TrainingState.IDLE
         if self._state_ctx.iter_forward_root is self:
@@ -192,6 +213,7 @@ class FSDPState(_State):
         self._training_state = TrainingState.PRE_BACKWARD
         self._register_root_post_backward_final_callback()
         if self._fsdp_param_group:
+#             logging.info("DLDEBUG: _pre_backward , module=%s", id(self._fsdp_param_group.module))
             self._fsdp_param_group.pre_backward(forward_grad_fns, *unused)
 
     def _root_post_backward_final_callback(self) -> None:
@@ -201,6 +223,9 @@ class FSDPState(_State):
                     # Run post-backward in case forward inputs did not require
                     # gradient so the autograd backward did not run
                     state._fsdp_param_group.post_backward()
+                # state._training_state = TrainingState.IDLE
+                # if state._fsdp_param_group:
+                #     state._fsdp_param_group._training_state = TrainingState.IDLE
                 if self._state_ctx.is_last_backward:
                     state._finalize_backward()
             if self._state_ctx.is_last_backward:
@@ -216,11 +241,14 @@ class FSDPState(_State):
             self._fsdp_param_group.finalize_backward()
 
     def _register_pre_backward_hook(self, output: Any) -> Any:
+#         logging.info("DLDEBUG: _register_pre_backward_hook, module=%s", id(self._fsdp_param_group.module))
         if not torch.is_grad_enabled():
             return output
-
+#         logging.info("DLDEBUG: 2 _register_pre_backward_hook, module=%s", id(self._fsdp_param_group.module))
+        # if torch.distributed.get_rank() == 0:
+        #    ForkedPdb().set_trace()
         flat_outputs, _ = tree_flatten(output)
-        tensors = tuple(t for t in flat_outputs if t.requires_grad)
+        tensors = tuple(t for t in flat_outputs if t is not None and t.requires_grad)
         if tensors:
             grad_fns = tuple(t.grad_fn for t in tensors if t.grad_fn is not None)
             pre_backward = functools.partial(self._pre_backward, grad_fns)
