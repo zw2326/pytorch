@@ -32,7 +32,8 @@ def fully_shard(
     mesh: Optional[DeviceMesh] = None,
     reshard_after_forward: Union[bool, int] = True,
     mp_policy: MixedPrecisionPolicy = MixedPrecisionPolicy(),
-    process_group: Optional[dist.ProcessGroup] = None
+    process_group: Optional[dist.ProcessGroup] = None,
+    replicate_process_group: Optional[dist.ProcessGroup] = None
 ):
     """
     Shard module parameters across data parallel workers.
@@ -105,13 +106,20 @@ def fully_shard(
         mesh_info = FSDPMeshInfo(mesh, shard_mesh_dim=0)
         if process_group is not None:
             mesh_info.shard_process_group = process_group
+        # if replicate_process_group is not None:
+        #     mesh_info.replicate_process_group = replicate_process_group
     else:
         mesh_info = HSDPMeshInfo(mesh, shard_mesh_dim=1, replicate_mesh_dim=0)
+        if process_group is not None:
+            mesh_info.shard_process_group = process_group
+        if replicate_process_group is not None:
+            mesh_info.replicate_process_group = replicate_process_group
+
     device = _get_device_from_mesh(mesh)
     post_forward_mesh_info = _get_post_forward_mesh_info(
         reshard_after_forward, mesh_info
     )
-#     logging.info("DLDEBUG: mesh_info=%s, device=%s, post_forward_mesh_info=%s", mesh_info, device, post_forward_mesh_info)
+    logging.info("DLDEBUG: mesh_info=%s, device=%s, post_forward_mesh_info=%s", mesh_info, device, post_forward_mesh_info)
 #     logging.info("DLDEBUG: mesh:  self.mesh.get_group(self.shard_mesh_dim)=%s, shard_process_group=%s",  mesh_info.mesh.get_group(mesh_info.shard_mesh_dim), mesh_info.shard_process_group)
     state = fully_shard.state(module)
     state.init(module, device, mp_policy)
