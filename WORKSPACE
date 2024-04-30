@@ -72,10 +72,17 @@ http_archive(
 )
 
 http_archive(
-    name = "com_github_opentelemetry-cpp",
+    name = "io_opentelemetry_cpp",
+    strip_prefix = "opentelemetry-cpp-1.14.2",
     urls = [
         "https://github.com/open-telemetry/opentelemetry-cpp/archive/refs/tags/v1.14.2.tar.gz",
     ],
+)
+
+new_local_repository(
+  name = "opentelemetry-api",
+  build_file = "//third_party:opentelemetry-cpp.BUILD",
+  path = "third_party/opentelemetry-cpp",
 )
 
 new_local_repository(
