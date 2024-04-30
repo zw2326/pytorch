@@ -608,16 +608,17 @@ def _export_non_strict(
         isinstance(obj, torch.ScriptObject) for obj in constants.values()
     ), "We expect all script objects have been replaced by FakeScriptObjects."
 
-    # prettify names for placeholder nodes
-    placeholder_naming_pass(
-        gm,
-        export_graph_signature,
-        mod,
-        fake_args,
-        fake_kwargs,
-        fake_params_buffers,
-        constants,
-    )
+    # FIXME(ycao): Skipping this because traced modules do not have signature yet
+    # # prettify names for placeholder nodes
+    # placeholder_naming_pass(
+    #     gm,
+    #     export_graph_signature,
+    #     mod,
+    #     fake_args,
+    #     fake_kwargs,
+    #     fake_params_buffers,
+    #     constants,
+    # )
 
     @dataclasses.dataclass
     class _ExportedProgramNonStrict:
