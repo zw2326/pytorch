@@ -28,6 +28,9 @@ from torch.utils._traceback import CapturedTraceback
 compiled_autograd_log = getArtifactLogger(__name__, "compiled_autograd")
 verbose_log = getArtifactLogger(__name__, "compiled_autograd_verbose")
 
+cached_fn = None
+idx_to_del = []
+
 
 def snapshot_verbose_logging_enabled():
     return torch._logging._internal.log_state.is_artifact_enabled(
@@ -65,6 +68,8 @@ class AutogradCompilerInstance:
         return GetItemSource(LocalSource(name), idx)
 
     def begin_capture(self, inputs: List[torch.Tensor], sizes: List[int]):
+        global cached_fn
+        cached_fn = None
         counters["compiled_autograd"]["captures"] += 1
         self.fx_tracer.root = torch.nn.Module()
         self.fx_tracer.graph = torch.fx.Graph(tracer_cls=PythonKeyTracer)
@@ -210,17 +215,58 @@ class AutogradCompilerInstance:
             self.fx_tracer.root, self.fx_tracer.graph, "CompiledAutograd"
         )
         set_locals_to_steal(graph, ["inputs"])
-        compiled_autograd_log.info(
-            "%s", lazy_format_graph_code("Compiled autograd graph", graph)
-        )
-        verbose_log.debug(
-            "%s", lazy_format_graph_code("Compiled autograd graph", graph)
-        )
+        # compiled_autograd_log.info(
+        #     "%s", lazy_format_graph_code("Compiled autograd graph", graph)
+        # )
+        # verbose_log.debug(
+        #     "%s", lazy_format_graph_code("Compiled autograd graph", graph)
+        # )
         trace_structured(
             "compiled_autograd_graph",
             payload_fn=lambda: graph.print_readable(print_output=False),
         )
-        return self.compiler_fn(graph)
+
+        def wrapper(inputs,sizes,hooks):
+
+            global cached_fn
+            global idx_to_del
+            global dummy_tensors
+            if not cached_fn:
+                idx_to_scalarify = []
+                for i in range(len(inputs)):
+                    inp = inputs[i]
+                    assert isinstance(inp, torch.Tensor)
+                    if inp.device.type == "cuda" or len(inp.size()) > 0:
+                        # not cpu scalars
+                        continue
+
+                    # scalars
+                    assert inp.dtype == torch.int64
+                    idx_to_scalarify.append(i)
+
+                compiled_autograd_log.info(f"idx_to_scalarify={idx_to_scalarify}")
+
+                nodes = [node for node in graph.graph.nodes]
+                for i in idx_to_scalarify:
+                    node = nodes[i+3] # 3 to offset for inputs, sizes, hooks
+                    for user in list(node.users.keys()):
+                        # bake into graph
+                        user.replace_input_with(node, inputs[i])
+                    # node._remove_from_list()
+
+                # compiled_autograd_log.info(
+                #     "%s", lazy_format_graph_code("Compiled autograd graph", graph)
+                # )
+                cached_fn = self.compiler_fn(graph)
+                idx_to_del = idx_to_scalarify
+                dummy_tensors = [torch.tensor(1, device="cuda") for _ in range(len(idx_to_del))]
+
+            for i,idx in enumerate(idx_to_del):
+                inputs[idx] = dummy_tensors[i]
+
+            return cached_fn(inputs, sizes, hooks)
+
+        return wrapper
 
     def reorder_accumulate_grad_nodes(self):
         """

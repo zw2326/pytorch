@@ -369,8 +369,10 @@ CacheNode* _compiled_autograd_impl(
       CacheKey key = node_args.key();
       if (is_verbose_logging_enabled &&
           cache->lookup(key, /*create=*/false) == nullptr) {
-        vcout() << "Creating cache entry for " << fn->name()
+        vcout() << "cache miss for " << fn->name()
                 << ", with key of size " << key.key_size << std::endl;
+      } else {
+        std::cout << "cache hit for " << fn->name() << std::endl;
       }
       cache = cache->lookup(key);
     }
@@ -516,6 +518,31 @@ CacheNode* _compiled_autograd_impl(
       call->node->release_variables();
     }
   }
+
+  // std::vector<at::Tensor> inputs = compiler_call.tensor_args.inputs;
+  // PyObject* pyinput = PyList_New(static_cast<Py_ssize_t>(inputs.size()));
+  // for (const auto i : c10::irange(inputs.size())) {
+  //   auto& t = inputs[i];
+  //   if (t.device() == at::kCPU) {
+  //     if (t.sizes().size() == 0) {
+  //       // cpu scalar
+  //       std::cout << "inputs " << i << " is a scalar, calling .item on dtype=" << t.dtype() << std::endl;
+  //       if (t.item().isIntegral(false)) {
+  //         PyList_SET_ITEM(pyinput, i, PyLong_FromSsize_t(t.item().toLong()));
+  //       } else {
+  //         std::cout << "was not a integral" << t.item().type() << std::endl;
+  //       }
+  //     } else {
+  //       // cpu non scalar
+  //       std::cout << "inputs " << i << " is not a scalar, moving to CUDA" << std::endl;
+  //       PyList_SET_ITEM(pyinput, i, THPVariable_Wrap(t.to(at::kCUDA)));
+  //     }
+  //   } else {
+  //     // cuda
+  //     PyList_SET_ITEM(pyinput, i, THPVariable_Wrap(t));
+  //   }
+  // }
+  // *graph_arg_inputs = pyinput;
 
   *graph_arg_inputs = THPVariable_WrapList(compiler_call.tensor_args.inputs);
   *graph_arg_sizes = wrap_int_list(compiler_call.dyn_size_inputs);
