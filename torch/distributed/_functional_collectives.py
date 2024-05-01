@@ -1,5 +1,6 @@
 import sys
 import warnings
+from dataclasses import dataclass
 from typing import cast, List, Optional, Tuple, TYPE_CHECKING, Union
 
 import torch
@@ -555,6 +556,95 @@ def permute_tensor(
     return all_to_all_single(self, output_split_sizes, input_split_sizes, group, tag)
 
 
+@dataclass
+class _CollectivePermuteSchedule:
+    dst_ranks: List[int]
+    src_ranks: List[int]
+    tensor_ranks: List[int]
+
+
+def _make_ring_sched(group_size) -> List[_CollectivePermuteSchedule]:
+    sched = []
+    for step in range(group_size - 1):
+        dst_ranks = [(r + 1) % group_size for r in range(group_size)]
+        src_ranks = [(r - 1) % group_size for r in range(group_size)]
+        tensor_ranks = [(r - 1 - step) % group_size for r in range(group_size)]
+        sched.append(
+            _CollectivePermuteSchedule(
+                dst_ranks=dst_ranks,
+                src_ranks=src_ranks,
+                tensor_ranks=tensor_ranks,
+            )
+        )
+    return sched
+
+
+def _collective_permute_eager(
+    input: torch.Tensor,
+    group: RANK_TYPES,
+):
+    group_name = _resolve_group_name(group, "")
+    group_size = c10d._get_group_size_by_name(group_name)
+    group_rank = c10d._get_group_rank_by_name(group_name)
+
+    # TODO: toplogy aware scheduling
+    sched = _make_ring_sched(group_size)
+    last_received = input.contiguous()
+    last_received_rank = group_rank
+    for step_sched in sched:
+        received = torch.ops._c10d_functional.ppermute(
+            last_received,
+            step_sched.dst_ranks,
+            step_sched.src_ranks,
+            group_name,
+        )
+        yield (last_received_rank, last_received)
+        last_received = torch.ops._c10d_functional.wait_tensor(received)
+        last_received_rank = step_sched.tensor_ranks[group_rank]
+    yield (last_received_rank, last_received)
+
+
+def _collective_permute_compiled(
+    input: torch.Tensor,
+    group: RANK_TYPES,
+):
+    group_name = _resolve_group_name(group, "")
+    group_size = c10d._get_group_size_by_name(group_name)
+    group_rank = c10d._get_group_rank_by_name(group_name)
+
+    # TODO: toplogy aware scheduling
+    sched = _make_ring_sched(group_size)
+    last_received = input.contiguous()
+    last_received_rank = group_rank
+    ret = []
+    for step_sched in sched:
+        received = torch.ops._c10d_functional.ppermute(
+            last_received,
+            step_sched.dst_ranks,
+            step_sched.src_ranks,
+            group_name,
+        )
+        ret.append((last_received_rank, last_received))
+        last_received = torch.ops._c10d_functional.wait_tensor(received)
+        last_received_rank = step_sched.tensor_ranks[group_rank]
+    ret.append((last_received_rank, last_received))
+    return ret
+
+
+def collective_permute(
+    input: torch.Tensor,
+    group: RANK_TYPES,
+):
+    group_name = _resolve_group_name(group, "")
+    group_size = c10d._get_group_size_by_name(group_name)
+    group_rank = c10d._get_group_rank_by_name(group_name)
+
+    if _are_we_tracing():
+        return _collective_permute_compiled(input, group)
+    else:
+        return _collective_permute_eager(input, group)
+
+
 class AsyncCollectiveTensor(torch.Tensor):
     r"""
     A Tensor wrapper subclass that is used to trigger a call to wait
@@ -921,6 +1011,14 @@ def _reduce_scatter_tensor_coalesced_native_meta(
         _reduce_scatter_tensor_native_meta(inp, reduce_op, group_size, group_name)
         for inp in inputs
     ]
+
+def ppermute_meta(
+    input: torch.Tensor,
+    dst_ranks: List[int],
+    src_ranks: List[int],
+    group_name: str,
+) -> torch.Tensor:
+    return torch.empty_like(input)
 
 
 if not torch._running_with_deploy():
