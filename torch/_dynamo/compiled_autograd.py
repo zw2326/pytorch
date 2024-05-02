@@ -35,6 +35,10 @@ def snapshot_verbose_logging_enabled():
     )
 
 
+def snapshot_cudagraph_enabled():
+    return torch._inductor.config.triton.cudagraphs
+
+
 def maybe_clone(x):
     if x is not None:
         return clone_preserve_strides(x)
@@ -197,6 +201,38 @@ class AutogradCompilerInstance:
             self.bind_tensors_to_proxies(input, proxies)
         return input
 
+    # Note: [Compiled autograd and cudagraphs]
+    # Eager autograd backward implements scalars as 0-dim tensors, see DivBackward0::other_.
+    # When compiled autograd traces those nodes, it lifts the scalar tensors, resulting in a graph
+    # with some cpu 0-dim tensor inputs. To prevent the entire graph from skipping cudagraph, we move the
+    # scalars tensors to cuda.
+    # To simplify this fx pass, we make a few assumptions specific to the compiled autograd graph:
+    #   1. cpu tensor inputs never affect the output device type of their users,
+    #      e.g. aten.div inherits type from numerator, not denominator
+    #   2. cpu tensor inputs are used in ops that accept cuda tensors too
+    def move_graph_nodes_to_cuda(self, graph) -> List[int]:
+        inputs_on_cpu = []
+        nodes = list(graph.nodes)
+        assert nodes[0].target == "inputs"
+        inputs = nodes[0]
+        inputs_users = list(inputs.users.keys())
+        # the ordering of the nodes should always [inputs, sizes, hooks, getitem, getitem1, ...]
+        # where getitemi accesses inputs[i]
+        first_getitem_idx = 3
+        assert nodes[first_getitem_idx] == inputs_users[0]
+        last_getitem_idx = first_getitem_idx + len(inputs_users) - 1
+        assert nodes[last_getitem_idx] == inputs_users[-1]
+        for i, node in enumerate(inputs_users):
+            is_cpu = node.meta["val"].device.type == "cpu"
+            is_scalar = len(node.meta["val"].size()) == 0
+            if is_cpu and is_scalar:
+                # move cpu scalars to cuda in the graph
+                node.meta["val"] = node.meta["val"].cuda()
+                inputs_on_cpu.append(i)
+
+        # return runtime indices we need to move to cuda
+        return inputs_on_cpu
+
     def end_capture(self, outputs):
         self.stack.close()
         self.fx_tracer.create_node(
@@ -206,6 +242,10 @@ class AutogradCompilerInstance:
             {},
         )
         self.reorder_accumulate_grad_nodes()
+        runtime_inputs_to_move: List[int] = []
+        if snapshot_cudagraph_enabled():
+            runtime_inputs_to_move = self.move_graph_nodes_to_cuda(self.fx_tracer.graph)
+
         graph = GraphModule(
             self.fx_tracer.root, self.fx_tracer.graph, "CompiledAutograd"
         )
@@ -220,7 +260,14 @@ class AutogradCompilerInstance:
             "compiled_autograd_graph",
             payload_fn=lambda: graph.print_readable(print_output=False),
         )
-        return self.compiler_fn(graph)
+
+        def runtime_wrapper(compiled_fn, inputs, sizes, hooks):
+            for i in runtime_inputs_to_move:
+                inputs[i] = inputs[i].cuda()
+
+            return compiled_fn(inputs, sizes, hooks)
+
+        return runtime_wrapper, self.compiler_fn(graph)
 
     def reorder_accumulate_grad_nodes(self):
         """
