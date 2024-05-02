@@ -363,8 +363,8 @@ is_nightly_or_source = "dev" in torch.__version__ or "git" in torch.__version__
 developer_warnings = is_fbcode() or is_nightly_or_source
 
 # The multiprocessing start method to use for inductor workers in the codecache.
-# "thread", "fork", or "spawn"
-worker_start_method = "thread"
+# "subprocess", "thread", "fork", or "spawn"
+worker_start_method = "subprocess"
 
 # Flags to turn on all_reduce fusion. These 2 flags should be automaticaly turned
 # on by DDP and should not be set by the users.
