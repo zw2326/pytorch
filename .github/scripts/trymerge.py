@@ -1674,6 +1674,26 @@ def is_flaky(
     )
 
 
+def is_unstable(
+    check: JobCheckState,
+    drci_classifications: Any,
+) -> bool:
+    if "unstable" in check.name:
+        return True
+
+    if not check or not drci_classifications:
+        return False
+
+    name = check.name
+    job_id = check.job_id
+
+    # Consult the list of unstable failures from Dr.CI
+    return any(
+        (name == unstable["name"] or (job_id and job_id == unstable["id"]))
+        for unstable in drci_classifications.get("UNSTABLE", [])
+    )
+
+
 def is_invalid_cancel(
     name: str,
     conclusion: Optional[str],
@@ -2065,7 +2085,8 @@ def categorize_checks(
             )
             target.append((checkname, url, job_id))
 
-            if classification in ("BROKEN_TRUNK", "FLAKY", "UNSTABLE"):
+            # Unstable jobs shouldn't count towards the "something might actually be wrong" threshold
+            if classification in ("BROKEN_TRUNK", "FLAKY"):
                 ok_failed_checks.append((checkname, url, job_id))
 
     if ok_failed_checks:
