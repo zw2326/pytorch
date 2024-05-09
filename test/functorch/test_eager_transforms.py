@@ -3254,6 +3254,7 @@ class TestHelpers(TestCase):
 @markDynamoStrictTest
 class TestComposability(TestCase):
     def test_deprecation_vmap(self, device):
+        vmap = torch._functorch.deprecated.vmap
         x = torch.randn(3, device=device)
 
         # functorch version of the API is deprecated
@@ -3271,7 +3272,7 @@ class TestComposability(TestCase):
         ["grad", "jacrev", "jacfwd", "grad_and_value", "hessian", "functionalize"],
     )
     def test_deprecation_transforms(self, device, transform):
-        api = getattr(functorch, transform)
+        api = getattr(torch._functorch.deprecated, transform)
         new_api = getattr(torch.func, transform)
 
         # functorch version of the API is deprecated
