@@ -1342,7 +1342,8 @@ def compile_fx(
         fixed = torch._inductor.utils.num_fw_fixed_arguments(
             num_example_inputs, len(example_inputs)
         )
-        user_visible_outputs = {}
+
+        user_visible_outputs = set()
 
         if config.keep_output_stride:
             model_outputs_node = output_node(model)

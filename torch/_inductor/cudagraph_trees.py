@@ -1541,6 +1541,8 @@ class CUDAGraphNode:
         Checks if this node can be run. The same pattern of tensor liveness and tensors
         managed in the cudagraph private pool must remain stable.
         """
+        breakpoint()
+        print(self.static_input_data_ptrs)
 
         # previously managed data pointers remain stable
         # this is on the hot path so moved to C++. equivalent to:
