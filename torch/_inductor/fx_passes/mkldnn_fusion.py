@@ -28,6 +28,10 @@ from .quantization import (
 )
 
 if torch._C._has_mkldnn:
+
+    import os
+    disable_mkldnn_opt_for_static_shape = os.environ.get("NO_MKLDNN_OPT_FOR_STATIC_SHAPE") == "1"
+
     aten = torch.ops.aten
     mkldnn = torch.ops.mkldnn
     prims = torch.ops.prims
@@ -887,7 +891,7 @@ if torch._C._has_mkldnn:
         is_transposed = conv_node.args[-3]
         if is_transposed:
             # TODO: Support dynamic shape case for MKLDNN conv transpose.
-            if has_free_symbols(input_size):
+            if (has_free_symbols(input_size) or disable_mkldnn_opt_for_static_shape):
                 return False
             groups = conv_node.args[-1]
             in_channels = weight_meta_value.size(0)
@@ -938,7 +942,7 @@ if torch._C._has_mkldnn:
         if (
             not is_lp_weight
             and not mkldnn._is_mkldnn_acl_supported()
-            and ((not torch._C.has_mkl) or has_free_symbols(batch_size))
+            and ((not torch._C.has_mkl) or (has_free_symbols(batch_size) or disable_mkldnn_opt_for_static_shape))
         ):
             return False
         for meta_value in [input_meta_value, weight_meta_value]:
@@ -1022,7 +1026,7 @@ if torch._C._has_mkldnn:
                     constant_args.insert(1, args[-2])  # output_padding
                     packed_weight_op = mkldnn._reorder_convolution_transpose_weight
                     packed_conv_op = mkldnn._convolution_transpose_pointwise.default
-                if not has_free_symbols(input_size):
+                if not (has_free_symbols(input_size) or disable_mkldnn_opt_for_static_shape):
                     packed_weight_inputs = (
                         (args[1],) + tuple(constant_args) + (input_size,)
                     )
@@ -1135,7 +1139,7 @@ if torch._C._has_mkldnn:
                     torch.float16,
                 )
                 batch_size = input.meta.get("val").shape[0]
-                if has_free_symbols(batch_size):
+                if (has_free_symbols(batch_size) or disable_mkldnn_opt_for_static_shape):
                     assert (
                         is_lp_weight or mkldnn._is_mkldnn_acl_supported()
                     ), f"only bf16/fp16 weight prepacking supports dynamic shape inputs but got {weight_dtype}"
@@ -1143,7 +1147,7 @@ if torch._C._has_mkldnn:
                 packed_weight_inputs = (
                     transpose_weight_node,
                     batch_size.node.shape_env.size_hint(batch_size.node.expr)
-                    if has_free_symbols(batch_size)
+                    if (has_free_symbols(batch_size) or disable_mkldnn_opt_for_static_shape)
                     else batch_size,
                 )
                 packed_weight_op = (
