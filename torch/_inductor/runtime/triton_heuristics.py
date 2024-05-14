@@ -1741,3 +1741,15 @@ def split_scan_grid(xnumel, rnumel):
     setattr(grid_fn, "grid_fn_str", grid_fn_str)  # noqa: B010
 
     return grid_fn
+
+
+def grid_combo_kernels(*numels, num_kernels, min_blocks):
+    """min_blocks is the minimal size of the grid x dimension"""
+    kernel_grid_fn = grid(*numels)
+
+    def grid_fn(meta):
+        cuda_grid = list(kernel_grid_fn(meta))
+        cuda_grid[0] = max(num_kernels * cuda_grid[0], min_blocks)
+        return tuple(cuda_grid)
+
+    return grid_fn
