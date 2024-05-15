@@ -564,6 +564,7 @@ class CUDAWarmupNode:
         already_warm: bool,
         id: GraphID,
     ):
+        breakpoint()
         self.wrapped_function = wrapped_function
         self.parent = parent
         self.cuda_graphs_pool = cuda_graphs_pool
@@ -1082,6 +1083,7 @@ class CUDAGraphNode:
 
     def run_graph(self):
         assert self.graph is not None
+        breakpoint()
         self.graph.replay()
 
     def all_outputs_are_dead(self):
@@ -1093,6 +1095,8 @@ class CUDAGraphNode:
 
     def _record(self, model, inputs):
         "Record the model"
+
+        breakpoint()
 
         def static_input_iter():
             for i in self.wrapped_function.static_input_idxs:
@@ -1850,6 +1854,7 @@ class CUDAGraphTreeManager:
             raise RuntimeError(f"Unknown node type {type(self.current_node)}")
 
     def _run(self, new_inputs: List[Tensor], function_id: FunctionID):
+        breakpoint()
         # we will try to end the current execution lazily, since
         # we dont want to do unnecessary checking of the existing outputs
         # on the hot path, but both recording and warmup only happen once

@@ -648,7 +648,9 @@ if HAS_CUDA and not TEST_WITH_ASAN:
             with mode:
                 inps = [torch.rand([6, 5], device="cuda")[1:] for _ in range(2)]
 
-            compiled_f = compile_fx_inner(mod, inps, num_fixed=1, cudagraphs=True)
+            compiled_f = compile_fx_inner(
+                mod, inps, static_input_idxs=[0], cudagraphs=True
+            )
 
             def get_unaligned_inputs():
                 return [torch.rand([6, 5], device="cuda")[1:] for _ in range(2)]
@@ -1703,6 +1705,29 @@ if HAS_CUDA and not TEST_WITH_ASAN:
 
             with self.assertRaisesRegex(Exception, "custom error msg"):
                 device = x.untyped_storage()
+
+        @torch._inductor.config.patch("triton.cudagraphs", True)
+        def test_multiple_dispatch(self):
+            torch.set_default_device("cuda")
+
+            @torch.compile
+            def fn(x, y):
+                return x * y
+
+            p1 = torch.nn.Parameter(torch.ones([2, 2]))
+            p2 = torch.nn.Parameter(torch.zeros([2, 2]))
+            # res1 = fn(torch.ones(2, 2), torch.ones(2, 2))
+            # res1 = fn(torch.ones(2, 2), torch.ones(2, 2))
+            # res1 = fn(torch.ones(2, 2), torch.ones(2, 2))
+            res1 = fn(torch.ones(2, 2), p1)
+            res1 = fn(torch.ones(2, 2), p1)
+            res1 = fn(torch.ones(2, 2), p1)
+            # res1 = fn(torch.ones(2, 2), p1)
+            # res2 = fn(torch.ones(2, 2), p2)
+            # res2 = fn(torch.ones(2, 2), p2)
+            # res2 = fn(torch.ones(2, 2), p2)
+            # self.assertNotEqual(res1, res2)
+            self.assertEqual(self.get_manager().new_graph_id().id, 2)
 
     instantiate_parametrized_tests(CudaGraphTreeTests)
 
