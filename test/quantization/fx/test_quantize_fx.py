@@ -1764,9 +1764,10 @@ class TestQuantizeFx(QuantizationTestCase):
                 def __init__(self):
                     super().__init__()
                     self.linear = torch.nn.Linear(5, 10)
+                    self.bias = torch.tensor((5,))
 
                 def forward(self, x):
-                    return self.linear(x)
+                    return self.linear(xi, bias=self.bias)
 
             linear_module_input = torch.rand(8, 5)
 
