@@ -587,6 +587,7 @@ def compile_fx_inner(
         ]
         cudagraph_fail_reasons = [s for b, s in cudagraph_tests if not b]
 
+        print("--------------------------------------")
         if not cudagraph_fail_reasons:
             if not config.triton.cudagraph_trees:
                 # Force specialize all inputs so that CUDA graphs will work
@@ -958,6 +959,8 @@ def cudagraphify(
 
     cudagraphify_fn: Callable[..., Any]
     if config.triton.cudagraph_trees:
+        print("HI---------------------")
+        print(static_input_idxs)
         cudagraphify_fn = functools.partial(
             new_cudagraphify_impl,
             device_index=device_index,

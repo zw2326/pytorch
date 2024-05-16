@@ -354,6 +354,9 @@ def cudagraphify_impl(model, inputs, static_input_idxs, *args, **kwargs):
     def deferred_cudagraphify(inputs):
         int_key = get_ints(inputs)
         fn = fn_cache.get(int_key)
+        print("CACHED")
+        print(int_key)
+        print(fn)
         if fn is not None:
             return fn(inputs)
 
@@ -364,6 +367,7 @@ def cudagraphify_impl(model, inputs, static_input_idxs, *args, **kwargs):
 
         # first get indices we need to check to align, then update our static inputs,
         # and finally copy
+        print(static_input_idxs)
         check_input_idxs = get_input_idxs_to_check(inputs, static_input_idxs)
         new_static_input_idxs = remove_unaligned_input_idxs(inputs, static_input_idxs)
         copy_misaligned_inputs(inputs, check_input_idxs)
@@ -643,6 +647,7 @@ class CUDAWarmupNode:
             out_refs = list(self.path_live_weakrefs())
             check_memory_pool(self.device_index, self.cuda_graphs_pool, out_refs)
 
+        print("ran warmed up node")
         return out
 
     @property
@@ -1848,6 +1853,9 @@ class CUDAGraphTreeManager:
             raise RuntimeError(f"Unknown node type {type(self.current_node)}")
 
     def _run(self, new_inputs: List[Tensor], function_id: FunctionID):
+        print(self.path_state)
+        print(self.current_gen)
+        print(self.roots)
         # we will try to end the current execution lazily, since
         # we dont want to do unnecessary checking of the existing outputs
         # on the hot path, but both recording and warmup only happen once
@@ -1873,6 +1881,8 @@ class CUDAGraphTreeManager:
         # then warm up graph B and make more allocations, the subsequent recording of A will not
         # necessarily use the same addresses as in the warm up. Thus any warm up of a node can only
         # be followed by warm up runs.
+        print(self.warmed_up_functions)
+        print(self.in_warmup)
         if (
             (
                 not (
@@ -1888,6 +1898,7 @@ class CUDAGraphTreeManager:
             if self.path_state == ExecutionState.EXECUTION:
                 self.apply_checkpoint_execution_state_in_allocator()
 
+            print("running eager")
             return self.run_eager(new_inputs, function_id)
 
         child_nodes = (
@@ -2040,6 +2051,7 @@ class CUDAGraphTreeManager:
             placeholders,
             mutated_input_idxs,
         )
+        print(self.ids_to_funcs)
         self.id_to_mode[id] = mode
         fn = functools.partial(self.run, function_id=id)
 
@@ -2138,10 +2150,12 @@ class CUDAGraphTreeManager:
         if self.can_start_new_generation():
             self.dealloc_current_path_weakrefs()
             self.current_node = None
+            breakpoint()
             return
 
         if self.current_node.all_outputs_are_dead():
             self.current_node = None
+            breakpoint()
             return
 
         self.check_warn_on_unable_to_start_executing(function_id)

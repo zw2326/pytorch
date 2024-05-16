@@ -1197,6 +1197,7 @@ class VariableBuilder:
             source.guard_source().is_nn_module()
             or get_static_address_type(value) is not None
         ) and not source.guard_source().is_fsdp_module():
+            print("static")
             self.assert_not_wrapped_by_this_graph(value)
             return self.tx.output.register_attr_or_module(
                 value, self.name, source=source

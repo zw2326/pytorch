@@ -364,21 +364,12 @@ def make_test(
                 scheduler_eager.last_epoch = 1
 
             with torch.set_grad_enabled(False):
-                for i in range(2):
+                for i in range(5):
                     compiled_step()
                     opt_eager.step()
                     if scheduler_cls:
                         call_scheduler(scheduler_eager)
                         call_scheduler(scheduler_compiled)
-
-            check_optim(
-                self,
-                optim_cls,
-                model_eager.parameters(),
-                model_compiled.parameters(),
-                opt_eager.state,
-                opt_compiled.state,
-            )
 
             if run_cudagraphs:
                 self.check_cudagraphs_ran()

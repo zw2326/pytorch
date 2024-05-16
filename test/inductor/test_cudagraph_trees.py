@@ -1704,6 +1704,43 @@ if HAS_CUDA and not TEST_WITH_ASAN:
             with self.assertRaisesRegex(Exception, "custom error msg"):
                 device = x.untyped_storage()
 
+        @torch._inductor.config.patch("triton.cudagraphs", True)
+        def test_multiple_dispatch(self):
+            torch.set_default_device("cuda")
+
+            @torch.compile
+            def fn(x, y):
+                return x * y
+
+            p1 = torch.nn.Parameter(torch.ones([2, 2]))
+            p2 = torch.nn.Parameter(torch.zeros([2, 2]))
+            torch._dynamo.decorators.mark_static_address(p1)
+            # res1 = fn(torch.ones(2, 2), torch.ones(2, 2))
+            # res1 = fn(torch.ones(2, 2), torch.ones(2, 2))
+            # res1 = fn(torch.ones(2, 2), torch.ones(2, 2))
+            print("start call 1")
+            res1 = fn(torch.ones(2, 2), p1)
+            print("end call 1")
+            print("start call 2")
+            res1 = fn(torch.ones(2, 2), p1)
+            print("end call 2")
+            print("start call 3")
+            res1 = fn(torch.ones(2, 2), p1)
+            print("end call 3")
+            print("start call 4")
+            res1 = fn(torch.ones(2, 2), p1)
+            print("end call 4")
+            print("start call 5")
+            res1 = fn(torch.ones(2, 2), p1)
+            print("end call 5")
+
+            # res1 = fn(torch.ones(2, 2), p1)
+            # res2 = fn(torch.ones(2, 2), p2)
+            # res2 = fn(torch.ones(2, 2), p2)
+            # res2 = fn(torch.ones(2, 2), p2)
+            # self.assertNotEqual(res1, res2)
+            self.assertEqual(self.get_manager().new_graph_id().id, 2)
+
     instantiate_parametrized_tests(CudaGraphTreeTests)
 
 if __name__ == "__main__":
