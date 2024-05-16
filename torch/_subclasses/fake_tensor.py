@@ -753,10 +753,18 @@ class TensorMetadata:
     sparse_dim: Optional[int]
 
 
-def extract_tensor_metadata(t: torch.Tensor) -> "TensorMetadata":
+def extract_tensor_metadata(t: torch.Tensor) -> TensorMetadata:
     """
     Extract the TensorMetadata of a tensor.
     """
+
+    # WARNING: Any changes to this (probably) need to be reflected in
+    # extract_tensor_metadata() in fake_tensor.cpp. So why have it in both
+    # places? This one emits a TensorMetadata which is actually used to
+    # reconstruct aspects of the tensor - so needs to be reversable. The one in
+    # fake_tensor.cpp is used for a cache key and is one-way (but much faster
+    # because it doesn't need to build up a python data structure).
+
     memory_format: Optional[torch.memory_format] = suggest_memory_format(t)
     if is_sparse_any(t) or not t.is_contiguous(memory_format=memory_format):
         memory_format = None
@@ -1208,7 +1216,7 @@ class FakeTensorMode(TorchDispatchMode):
                         output.append(_UNHASHABLE)
                         valid_input = False
                     else:
-                        output.append(extract_tensor_metadata(arg))
+                        output.append(torch._C._FakeTensor_extract_tensor_metadata(arg))
                 else:
                     # Caught by _verify_args_for_hash later.
                     output.append(_UNHASHABLE)
