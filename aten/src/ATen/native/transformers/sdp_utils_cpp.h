@@ -30,6 +30,7 @@ enum class SDPBackend {
   efficient_attention = 2,
   cudnn_attention = 3,
   overrideable = 4
+  mps_attention = 5,
 };
 
 // Note that if this changed make sure to update
