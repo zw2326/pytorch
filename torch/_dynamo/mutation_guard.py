@@ -137,3 +137,4 @@ def install_generation_tagging_init():
         Module.___needs_generation_tag_patch = False  # type: ignore[attr-defined]
 
     GenerationTracker.generation += 1
+    print(f"incrementing generation: {GenerationTracker.generation}")
