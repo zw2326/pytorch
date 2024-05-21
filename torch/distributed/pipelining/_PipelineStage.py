@@ -2,6 +2,7 @@
 import logging
 import operator
 from abc import ABC, abstractmethod
+from collections.abc import Iterable
 from typing import Any, Dict, List, Optional, Tuple, Union
 
 import torch
@@ -16,7 +17,7 @@ from torch.nn.parallel import DistributedDataParallel
 from ._backward import stage_backward
 from ._debug import map_debug_info
 from ._IR import Pipe
-from ._utils import flatten_args, modify_graph_op_device
+from ._utils import flatten_args, modify_graph_op_device, validate_tensors_metadata
 
 logger = logging.getLogger(__name__)
 
@@ -26,7 +27,8 @@ class RootArgPlaceholder:
     Placeholder for model-level inputs.
     """
 
-    pass
+    def __init__(self, tensor):
+        self.meta = tensor.to("meta")
 
 
 class RecvInfo:
@@ -118,6 +120,7 @@ class PipelineStageBase(ABC):
             )
 
         # Run time states
+        self._outputs_meta: Optional[Tuple[torch.Tensor]] = None
         # map microbatch ID to list of forward tensor args
         self.fwd_cache: Dict[int, Tuple[Any, List[torch.Tensor]]] = {}
         # Current forward chunk id
@@ -175,6 +178,25 @@ class PipelineStageBase(ABC):
         Returns true if this stage is the last stage in the pipeline.
         """
         return self.stage_index == self.num_stages - 1
+
+    def _configure_outputs_meta(self, outputs_meta: Iterable[torch.Tensor]):
+        """
+        Track the output shapes/dtype of this stage since they determine the send operation(s) which must match
+        recv operations of the next stage.  The next stage _will_ be freezing its recv buffers based on its initial
+        configuration, so it's important to also freeze/validate the output side to avoid any send/recv mismatches
+        which could show up as hangs, silent corruption, or other errors.
+        """
+        assert (
+            self._outputs_meta is None
+        ), "Attempting to reconfigure output_meta, which is not supported"
+        self._outputs_meta = tuple(outputs_meta)  # type: ignore[assignment]
+
+    def get_outputs_meta(self) -> Tuple[torch.Tensor]:
+        """Get the output metadata (meta tensors) reprensenting the outputs of this stage"""
+        assert (
+            self._outputs_meta is not None
+        ), "Attempted to get_outputs_meta() without configuring output meta"
+        return self._outputs_meta
 
     def _create_grad_send_info(
         self,
@@ -453,6 +475,7 @@ class PipelineStageBase(ABC):
         `args` and `kwargs` are the inputs from *external* to this stage. They
         applies only to the first stage in most cases.
         """
+
         if self.is_first:
             # First stage doesn't need to receive anything
             composite_args = args
@@ -462,6 +485,8 @@ class PipelineStageBase(ABC):
             # Activations only come in args form
             composite_args = self._retrieve_recv_activations()
             composite_kwargs = {}
+
+        self._validate_fwd_input(args, kwargs)
 
         # Compute forward
         try:
@@ -498,6 +523,7 @@ class PipelineStageBase(ABC):
         logger.debug(
             f"{self.log_prefix} Forwarded chunk {self.fwd_chunk_id}, outputs: {map_debug_info(output)}"  # noqa: G004
         )
+        self._validate_fwd_outputs(output_tuple)
         self.fwd_chunk_id += 1
         return output
 
@@ -542,6 +568,42 @@ class PipelineStageBase(ABC):
             f"{self.log_prefix} Backwarded chunk {self.bwd_chunk_id}"  # noqa: G004
         )
         self.bwd_chunk_id += 1
+
+    def _validate_fwd_input(self, args, kwargs):
+        """Raises a RuntimeError if shapes of input args/kwargs do not match the shapes configured for this stage."""
+
+        if self.is_first:
+            # TODO why is there a separate recv_info for each pipeline chunk?
+            expected_args = self.args_recv_info[self.fwd_chunk_id]
+        else:
+            expected_args = tuple()
+
+        if len(kwargs):
+            # TODO- need a mapping of kwarg to position in self.args_recv_info
+            # without it, we just validate shapes for args and ignore kwargs
+            logger.warning(
+                "Unable to validate input info for traced modules with kwargs."
+            )
+            expected_args = expected_args[: len(expected_args) - len(kwargs)]
+
+        # TODO- need a mapping of kwarg to position in self.args_recv_info
+        # maybe it's impossible to tell whether the len mismatches because
+        # (a) the user passed an extra arg or missed an arg
+        # (b) the user did not pass a kwarg, which has a default value baked into expected_args
+        expected_tensors_meta = [
+            e.meta if isinstance(e, RootArgPlaceholder) else e.buffer
+            for e in expected_args
+        ]
+        validate_tensors_metadata("forward input args", expected_tensors_meta, args)
+
+    def _validate_fwd_outputs(self, outputs: Tuple[torch.Tensor]):
+        """Raises a RuntimeError if this stage produces an output of unexpected shape/dtype.
+        Most likely, this could be cause either by incorrect user specification of output shapes, or becuase
+        shape inference was done on the original model but then at runtime the model is wrapped with something like
+        mixed precision which changes output dtype.
+        """
+        expected_tensors_meta = self.get_outputs_meta()
+        validate_tensors_metadata("forward outputs", expected_tensors_meta, outputs)
 
 
 class _PipelineStage(PipelineStageBase):
@@ -656,10 +718,11 @@ class _PipelineStage(PipelineStageBase):
             """
             Create a receive buffer for a placeholder.
             """
+            example_value = placeholder.meta["val"]
             if arg_node.op == "placeholder":
                 # This is a root level placeholder, thus an input argument to the entire model.
                 # We are likely at stage 0, hence no need to create a receive buffer.
-                return RootArgPlaceholder()
+                return RootArgPlaceholder(example_value)
 
             # Figure out the source stage of this input
             while arg_node.target is operator.getitem:
@@ -672,7 +735,6 @@ class _PipelineStage(PipelineStageBase):
             src_stage = self.get_stage_index_of_submod(arg_node.name)
 
             # Create a receive buffer for this placeholder
-            example_value = placeholder.meta["val"]
             logger.debug(
                 f"{self.log_prefix} "  # noqa: G004
                 f"Creating recv buffer for input '{placeholder.name}' "
@@ -757,8 +819,20 @@ class _PipelineStage(PipelineStageBase):
                 if dst_rank is not None:
                     dsts.append(dst_rank)
 
+        output_node = self._get_output_node()
+        output_vals: Tuple[torch.Tensor] = tuple(
+            v.meta["val"] for v in flatten_args(output_node.args)
+        )
+        self._configure_outputs_meta(output_vals)
+
         logger.debug(f"{self.log_prefix} " f"Send info: {act_send_info}")  # noqa: G004
         return act_send_info
+
+    def _get_output_node(self):
+        output_nodes = [node for node in self.submod.graph.nodes if node.op == "output"]
+        assert len(output_nodes) == 1
+        output_node = output_nodes[0]
+        return output_node
 
     def _create_grad_recv_info(
         self,
@@ -769,9 +843,8 @@ class _PipelineStage(PipelineStageBase):
         """
         # Dict[output_index, RecvInfo]
         grad_recv_info: Dict[int, RecvInfo] = {}
-        output_nodes = [node for node in self.submod.graph.nodes if node.op == "output"]
-        assert len(output_nodes) == 1
-        output_node = output_nodes[0]
+        output_node = self._get_output_node()
+
         # The output node may take multiple args, meaning the submod having multiple output values.
         output_vals = flatten_args(output_node.args)
 
@@ -1028,6 +1101,8 @@ class ManualPipelineStage(PipelineStageBase):
         else:
             self.outputs = create_empty_tensors(output_args, device)
 
+        self._configure_outputs_meta(self.outputs)
+
         # these are the buffers used in backwards send/recv, they are allocated later
         self.outputs_grad: List[torch.Tensor] = []
 
@@ -1061,7 +1136,7 @@ class ManualPipelineStage(PipelineStageBase):
                 self.args_recv_info[chunk_id] = recv_infos
             else:
                 self.args_recv_info[chunk_id] = tuple(
-                    [RootArgPlaceholder() for _ in self.inputs]
+                    [RootArgPlaceholder(i) for i in self.inputs]
                 )
 
         # Send info during forward for each activation
