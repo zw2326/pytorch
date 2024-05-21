@@ -458,6 +458,8 @@ def _size_of(node: fx.Node) -> int:
             return _tensor_nbytes(hint_int(val.numel(), fallback=4098), val.dtype)
 
         raise RuntimeError(f"Unknown metadata type {type(val)}")
+    if node.op == "get_attr":
+        return 0
     raise RuntimeError("We should always have `val` metadata on the nodes")
 
 
@@ -1278,6 +1280,75 @@ def get_name_to_node(graph: fx.Graph):
     return name_to_node
 
 
+def _optimize_runtime_with_given_memory(
+    memory: List[float],
+    runtimes: List[float],
+    max_memory: float,
+) -> torch.Tensor:
+    """
+    Given a list of operator names, their corresponding runtimes, and the
+    maximum amount of memory available, returns the subset of operators to save
+    s.t. we spend the least time recomputing while staying under the memory
+    budget.
+    Uses https://docs.scipy.org/doc/scipy/reference/generated/scipy.optimize.milp.html
+    """
+    import numpy as np
+    from scipy.optimize import Bounds, LinearConstraint, milp
+
+    memory = np.array(memory)
+    runtimes = np.array(runtimes)
+    c = -runtimes  # type: ignore[operator]
+
+    memory_constraint = LinearConstraint(A=memory, ub=max_memory)
+    constraints = [memory_constraint]
+
+    integrality = np.ones_like(c)
+    res = milp(
+        c=c, constraints=constraints, integrality=integrality, bounds=Bounds(0, 1)
+    )
+    if not res.success:
+        raise RuntimeError("Somehow scipy solving failed")
+    return res.x
+
+
+from torch.utils._mode_utils import no_dispatch
+
+RUNTIME_MODE = "analytical"
+
+
+def estimate_runtime(node):
+    def materialize_arg(x):
+        if isinstance(x, fx.Node) and isinstance(x.meta["val"], torch.Tensor):
+            shape = x.meta['val'].shape
+            def realize_symbol(d):
+                return d if isinstance(d, int) else d.node.int
+            shape = [realize_symbol(s) for s in shape]
+            return x.meta['val'].new_zeros(shape)
+        return x
+
+    if RUNTIME_MODE == "placeholder":
+        return 1
+
+    if RUNTIME_MODE == "profile":
+        from triton.testing import do_bench
+        with no_dispatch():
+            args, kwargs = pytree.tree_map(materialize_arg, (node.args, node.kwargs))
+            ms = do_bench(lambda: node.target(*args, **kwargs))
+            return ms
+
+    if RUNTIME_MODE == "analytical":
+        # todo(chilli): Normalize this to also return ms
+        from torch.utils.flop_counter import FlopCounterMode
+
+        args, kwargs = pytree.tree_map(materialize_arg, (node.args, node.kwargs))
+        with FlopCounterMode(display=False) as mode:
+            node.target(*args, **kwargs)
+        counted_flops = mode.get_total_flops()
+        return max(counted_flops, 1)
+
+    return 1
+
+
 def choose_saved_values_set(
     joint_graph: fx.Graph, node_info: NodeInfo, memory_budget=1
 ) -> List[fx.Node]:
@@ -1306,7 +1377,129 @@ def choose_saved_values_set(
         node_info,
         min_cut_options,
     )
-    return runtime_optimized_saved_values
+    # return runtime_optimized_saved_values
+    if memory_budget == 1:
+        return runtime_optimized_saved_values
+
+    def estimate_activations_size(saved_values):
+        return sum([_size_of(i) for i in saved_values]) / 1e9
+
+    min_act_size = estimate_activations_size(node_info.inputs)
+    max_act_size = estimate_activations_size(runtime_optimized_saved_values)
+    # The optimized choice is smaller than the inputs anyways
+    if max_act_size <= min_act_size:
+        return runtime_optimized_saved_values
+
+    more_aggressive_options = replace(
+        min_cut_options,
+        ban_if_used_far_apart=False,
+        ban_if_long_fusible_chains=False,
+        ban_if_materialized_backward=False,
+    )
+    more_aggressive_saved_values, _ = get_saved_values(
+        joint_graph, node_info, more_aggressive_options
+    )
+
+    def get_normalized_size(sz):
+        return (sz / 1e9) / (max_act_size - min_act_size)
+
+    def get_mem_ratio(cur):
+        return (cur - min_act_size) / (max_act_size - min_act_size)
+
+    if (
+        get_mem_ratio(estimate_activations_size(more_aggressive_saved_values))
+        < memory_budget
+    ):
+        return more_aggressive_saved_values
+
+    aggressive_options = replace(
+        more_aggressive_options,
+        ban_if_not_in_allowlist=False,
+    )
+    aggressive_recomputation_saved_values, banned_nodes = get_saved_values(
+        joint_graph, node_info, aggressive_options
+    )
+
+    if (
+        get_mem_ratio(estimate_activations_size(aggressive_recomputation_saved_values))
+        < memory_budget
+    ):
+        return aggressive_recomputation_saved_values
+
+    from torch._inductor.fx_utils import get_node_storage
+
+    input_storages = {get_node_storage(node) for node in node_info.inputs}
+
+    def get_recomputable_banned_nodes(banned_nodes, saved_values):
+        return [
+            i
+            for i in banned_nodes
+            if not (i.dist_from_bw >= int(1e9) or get_node_storage(i) in input_storages)
+        ]
+
+    recomputable_banned_nodes = get_recomputable_banned_nodes(
+        banned_nodes, aggressive_recomputation_saved_values
+    )
+
+    def print_budget_real_mem(act_size, name=""):
+        print(f"{get_mem_ratio(act_size):.2f}: {act_size:.2f}GB ({name})")
+
+    print_budget_real_mem(
+        estimate_activations_size(runtime_optimized_saved_values), "default"
+    )
+    print_budget_real_mem(
+        estimate_activations_size(more_aggressive_saved_values), "more aggressive"
+    )
+    print_budget_real_mem(
+        estimate_activations_size(aggressive_recomputation_saved_values), "aggressive"
+    )
+
+    all_recomputable_banned_nodes = sorted(
+        recomputable_banned_nodes, key=_size_of, reverse=True
+    )
+    if len(all_recomputable_banned_nodes) == 0:
+        return node_info.inputs
+    memories = [get_normalized_size(_size_of(i)) for i in all_recomputable_banned_nodes]
+    runtimes = [estimate_runtime(node) for node in all_recomputable_banned_nodes]
+    cur_memory_budget = memory_budget
+    from torch.utils._mode_utils import no_dispatch
+
+    with no_dispatch():
+        banned_nodes = _optimize_runtime_with_given_memory(
+            memories, runtimes, max(memory_budget, 0)
+        )
+        dont_ban = set()
+        for idx, i in enumerate(banned_nodes.tolist()):
+            if not i:
+                dont_ban.add(all_recomputable_banned_nodes[idx])
+        predicted_saved_nodes = set(all_recomputable_banned_nodes) - dont_ban
+        # print([(i, get_normalized_size(_size_of(i))) for i in dont_ban])
+        estimated_activations_saved = estimate_activations_size(
+            predicted_saved_nodes
+        ) / (max_act_size - min_act_size)
+
+        saved_values, banned_nodes = get_saved_values(
+            joint_graph,
+            node_info,
+            aggressive_options,
+            dont_ban,
+        )
+        # todo(chilli): Estimated doesn't align exaclty with actual - actual is
+        # usually less memory than estimated. i'm guessing (actually quite
+        # unsure about this) that's because estimated is just only including
+        # tensors we actually banned from recompute, but there may be other
+        # tensors that we choose to save.
+        print(f"desired: {cur_memory_budget} ")
+        print(f"allow recomputing: {dont_ban}")
+        print(f"estimated: {estimate_activations_size(predicted_saved_nodes)}")
+        print(
+            f"estimated ratio: {estimate_activations_size(predicted_saved_nodes)/(max_act_size - min_act_size)}"
+        )
+        print(f"actual: {estimate_activations_size(saved_values) - min_act_size}")
+        print(f"actual ratio: {get_mem_ratio(estimate_activations_size(saved_values))}")
+        print_budget_real_mem(estimate_activations_size(saved_values), "milp")
+
+        return saved_values
 
 
 def min_cut_rematerialization_partition(
@@ -1422,7 +1615,16 @@ def min_cut_rematerialization_partition(
             for user in node.users:
                 node.dist_from_bw = min(node.dist_from_bw, user.dist_from_bw + 1)
 
-    saved_values = choose_saved_values_set(joint_graph, node_info, memory_budget=1)
+    memory_budget = config.memory_budget
+    for node in joint_graph.nodes:
+        if isinstance(node.meta.get("memory_budget", None), float):
+            memory_budget = node.meta["memory_budget"]
+            break
+    print("Memory Budget: ", memory_budget)
+
+    saved_values = choose_saved_values_set(
+        joint_graph, node_info, memory_budget=memory_budget
+    )
     # save_for_backward on tensors and stashes symints in autograd .ctx
     saved_sym_nodes = list(filter(is_sym_node, saved_values))
     saved_values = list(filter(lambda n: not is_sym_node(n), saved_values))
