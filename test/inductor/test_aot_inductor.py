@@ -95,6 +95,7 @@ def check_model(
             "abi_compatible": self.abi_compatible,
             "allow_stack_allocation": self.allow_stack_allocation,
             "use_minimal_arrayref_interface": self.use_minimal_arrayref_interface,
+            "aot_inductor.package": self.package,
         }
     ):
         torch.manual_seed(0)
@@ -205,7 +206,9 @@ class AOTInductorTestsTemplate:
         )
         expected_path = os.path.join(tempfile.mkdtemp(dir=cache_dir()), "model.so")
         actual_path = AOTIRunnerUtil.compile(
-            model, example_inputs, options={"aot_inductor.output_path": expected_path}
+            model,
+            example_inputs,
+            options={"aot_inductor.output_path": expected_path},
         )
         self.assertTrue(actual_path == expected_path)
 
@@ -2463,9 +2466,14 @@ class AOTInductorTestsTemplate:
             {
                 "abi_compatible": self.abi_compatible,
                 "aot_inductor.debug_compile": True,
+                "aot_inductor.package": False,
             }
         ):
-            so_path = AOTIRunnerUtil.compile(m, inputs, dynamic_shapes=dynamic_shapes)
+            so_path = AOTIRunnerUtil.compile(
+                m,
+                inputs,
+                dynamic_shapes=dynamic_shapes,
+            )
         with open(os.path.splitext(so_path)[0] + ".cpp") as cpp:
             src_code = cpp.read()
             FileCheck().check_count(
@@ -2821,6 +2829,7 @@ class AOTInductorTestABICompatibleCpu(TestCase):
     check_model_with_multiple_inputs = check_model_with_multiple_inputs
     allow_stack_allocation = False
     use_minimal_arrayref_interface = False
+    package = False
 
 
 def fail_with_and_without_stack_allocation(is_skip=False):
@@ -2853,14 +2862,18 @@ def fail_minimal_arrayref_interface(is_skip=False):
 
 def fail_cuda(is_skip=False):
     return TestFailure(
-        ("abi_compatible_cuda", "non_abi_compatible_cuda"),
+        (
+            "abi_compatible_cuda",
+            "non_abi_compatible_cuda",
+            "packaged_abi_compatible_cuda",
+        ),
         is_skip=is_skip,
     )
 
 
 def fail_abi_compatible_cuda(is_skip=False):
     return TestFailure(
-        ("abi_compatible_cuda",),
+        ("abi_compatible_cuda", "packaged_abi_compatible_cuda"),
         is_skip=is_skip,
     )
 
@@ -2868,6 +2881,13 @@ def fail_abi_compatible_cuda(is_skip=False):
 def fail_non_abi_compatible_cuda(is_skip=False):
     return TestFailure(
         ("non_abi_compatible_cuda",),
+        is_skip=is_skip,
+    )
+
+
+def fail_package_abi_compatible_cuda(is_skip=False):
+    return TestFailure(
+        ("packaged_abi_compatible_cuda",),
         is_skip=is_skip,
     )
 
@@ -2972,7 +2992,12 @@ CUDA_TEST_FAILURES = {
     "test_runtime_checks_shape_failed": fail_non_abi_compatible_cuda(is_skip=True),
     # quantized unsupported for GPU
     "test_quantized_linear": fail_cuda(is_skip=True),
+    "test_constant_original_fqn_and_dtype": fail_package_abi_compatible_cuda(
+        is_skip=True
+    ),
+    "test_output_path_2": fail_package_abi_compatible_cuda(is_skip=True),
 }
+
 
 if TEST_WITH_ROCM:
     CUDA_TEST_FAILURES.update(
@@ -3063,6 +3088,7 @@ class AOTInductorTestABICompatibleCpuWithStackAllocation(TestCase):
     check_model_with_multiple_inputs = check_model_with_multiple_inputs
     allow_stack_allocation = True
     use_minimal_arrayref_interface = False
+    package = False
 
 
 copy_tests(
@@ -3082,6 +3108,7 @@ class AOTInductorTestABICompatibleCpuWithStackAllocationAndMinimalArrayRefInterf
     check_model_with_multiple_inputs = check_model_with_multiple_inputs
     allow_stack_allocation = True
     use_minimal_arrayref_interface = True
+    package = False
 
 
 copy_tests(
@@ -3100,12 +3127,32 @@ class AOTInductorTestABICompatibleCuda(TestCase):
     check_model_with_multiple_inputs = check_model_with_multiple_inputs
     allow_stack_allocation = False
     use_minimal_arrayref_interface = False
+    package = False
 
 
 copy_tests(
     AOTInductorTestsTemplate,
     AOTInductorTestABICompatibleCuda,
     "abi_compatible_cuda",
+    CUDA_TEST_FAILURES,
+)
+
+
+@unittest.skipIf(sys.platform == "darwin", "No CUDA on MacOS")
+class AOTInductorTestPackagedABICompatibleCuda(TestCase):
+    device = "cuda"
+    abi_compatible = True
+    check_model = check_model
+    check_model_with_multiple_inputs = check_model_with_multiple_inputs
+    allow_stack_allocation = False
+    use_minimal_arrayref_interface = False
+    package = True
+
+
+copy_tests(
+    AOTInductorTestsTemplate,
+    AOTInductorTestPackagedABICompatibleCuda,
+    "packaged_abi_compatible_cuda",
     CUDA_TEST_FAILURES,
 )
 
@@ -3121,6 +3168,7 @@ class AOTInductorTestNonABICompatibleCpu(TestCase):
     check_model_with_multiple_inputs = check_model_with_multiple_inputs
     allow_stack_allocation = False
     use_minimal_arrayref_interface = False
+    package = False
 
 
 copy_tests(
@@ -3158,6 +3206,7 @@ class AOTInductorTestNonABICompatibleCuda(TestCase):
     check_model_with_multiple_inputs = check_model_with_multiple_inputs
     allow_stack_allocation = False
     use_minimal_arrayref_interface = False
+    package = False
 
 
 copy_tests(

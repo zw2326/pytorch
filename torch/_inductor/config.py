@@ -747,6 +747,9 @@ class aot_inductor:
     # flag to allow buffer mutation. This would remove the read-only property from buffers.
     allow_buffer_mutation: bool = False
 
+    # flag to decide whether to package the result into an archive file
+    package = False
+
 
 class cuda:
     # CUDA arch to use for CUDA template kernel compilation.

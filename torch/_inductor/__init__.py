@@ -1,4 +1,4 @@
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 import torch.fx
 import torch.utils._pytree as pytree
@@ -47,6 +47,7 @@ def aot_compile(
     Returns:
         Path to the generated shared library
     """
+    from torch._inductor import config
     from .compile_fx import compile_fx_aot
 
     # We will serialize the pytree info into the .so as constant strings
@@ -101,11 +102,54 @@ def aot_compile(
         }
     )
 
-    return compile_fx_aot(
-        gm,
-        list(flat_example_inputs),
-        config_patches=options,
-    )
+    if options.get("aot_inductor.package", False) or config.aot_inductor.package:
+        from .package import save_package
+
+        output_path = (
+            options.get("aot_inductor.output_path")
+            or config.aot_inductor.output_path
+            or ""
+        )
+        if not output_path:
+            # Generate the so to a tmp directory
+            options["aot_inductor.output_path"] = ""
+            config.aot_inductor.output_path = ""
+
+        so_path = compile_fx_aot(
+            gm,
+            list(flat_example_inputs),
+            config_patches=options,
+        )
+
+        # Save the package to the given path (or tmp directory if not specified)
+        config.aot_inductor.output_path = output_path
+        archive_path = save_package(so_path=so_path)
+        return archive_path
+
+    else:
+        return compile_fx_aot(
+            gm,
+            list(flat_example_inputs),
+            config_patches=options,
+        )
+
+
+def aot_load(path: str, device: str):
+    """
+    Loads the packaged artifact created by inductor.aot_compile with config
+    `aot_inductor.package=True`. Returns a python callable.
+    """
+    from torch._inductor import config
+
+    if not config.aot_inductor.package:
+        from torch._export import aot_load
+
+        return aot_load(path, device)
+
+    else:
+        from .package import load_package
+
+        return load_package(path, device)
 
 
 def list_mode_options(
