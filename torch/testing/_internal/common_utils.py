@@ -1115,7 +1115,9 @@ def run_tests(argv=UNITTEST_ARGS):
         import pytest
         os.environ["NO_COLOR"] = "1"
         exit_code = pytest.main(args=pytest_args)
+        print(f"the arguments are {pytest_args}")
         if TEST_SAVE_XML:
+            print(f"sanitizing pytest xml at {test_report_path}")
             sanitize_pytest_xml(test_report_path)
 
         if not RERUN_DISABLED_TESTS:

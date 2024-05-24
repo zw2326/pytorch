@@ -72,6 +72,11 @@ from tools.testing.test_selections import (
     THRESHOLD,
 )
 
+from tools.testing.upload_artifacts import (
+    trigger_upload_test_stats_intermediate_workflow,
+    zip_and_upload_artifacts,
+)
+
 HAVE_TEST_SELECTION_TOOLS = True
 # Make sure to remove REPO_ROOT after import is done
 sys.path.remove(str(REPO_ROOT))
@@ -1585,6 +1590,11 @@ def run_tests(
     def handle_error_messages(failure: Optional[TestFailure]):
         if failure is None:
             return False
+        if IS_CI and options.upload_artifacts_while_running:
+            zip_and_upload_artifacts()
+            print("hello")
+            trigger_upload_test_stats_intermediate_workflow()
+
         failures.append(failure)
         print_to_stderr(failure.message)
         return True
