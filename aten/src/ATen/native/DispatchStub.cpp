@@ -147,6 +147,12 @@ void* DispatchStubImpl::get_call_ptr(
       return mps_dispatch_ptr;
 #endif
 
+// #if defined(USE_XPU)
+    case DeviceType::XPU:
+      TORCH_INTERNAL_ASSERT(xpu_dispatch_ptr, "DispatchStub: missing XPU kernel");
+      return xpu_dispatch_ptr;
+// #endif
+
     case DeviceType::PrivateUse1:
       TORCH_INTERNAL_ASSERT(privateuse1_dispatch_ptr, "DispatchStub: missing PrivateUse1 kernel");
       return privateuse1_dispatch_ptr;

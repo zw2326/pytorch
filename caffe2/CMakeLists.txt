@@ -60,7 +60,6 @@ if(INTERN_BUILD_ATEN_OPS)
   # Generate the headers wrapped by our operator
   file(GLOB_RECURSE torchgen_python "${PROJECT_SOURCE_DIR}/torchgen/*.py")
 
-
   # Add source, includes, and libs to lists
   list(APPEND Caffe2_CPU_SRCS ${ATen_CPU_SRCS})
   list(APPEND Caffe2_GPU_SRCS ${ATen_CUDA_CPP_SRCS})
@@ -113,6 +112,7 @@ add_subdirectory(utils)
 if(NOT USE_FBGEMM)
   add_subdirectory(perfkernels)
 endif()
+
 
 if(NOT INTERN_BUILD_MOBILE)
   add_subdirectory(proto)
@@ -1059,13 +1059,13 @@ if(USE_XPU)
   if(NOT _exitcode EQUAL 0)
     message(FATAL_ERROR "Fail to fetch ${TORCH_XPU_OPS_REPO_URL}")
   endif()
-  execute_process(
-    COMMAND git checkout --quiet ${TORCH_XPU_OPS_COMMIT}
-    WORKING_DIRECTORY ${TORCH_XPU_OPS_DIR}
-    RESULT_VARIABLE _exitcode)
-  if(NOT _exitcode EQUAL 0)
-    message(FATAL_ERROR "Fail to checkout ${TORCH_XPU_OPS_REPO_URL} to ${TORCH_XPU_OPS_COMMIT}")
-  endif()
+  # execute_process(
+  #   COMMAND git checkout --quiet ${TORCH_XPU_OPS_COMMIT}
+  #   WORKING_DIRECTORY ${TORCH_XPU_OPS_DIR}
+  #   RESULT_VARIABLE _exitcode)
+  # if(NOT _exitcode EQUAL 0)
+  #   message(FATAL_ERROR "Fail to checkout ${TORCH_XPU_OPS_REPO_URL} to ${TORCH_XPU_OPS_COMMIT}")
+  # endif()
 
   set(TORCH_XPU_OPS_INCLUDE_DIRS
       ${TORCH_SRC_DIR}/csrc/api
@@ -1902,6 +1902,7 @@ if(BUILD_TEST)
       endif()
     endforeach()
   endif()
+
 endif()
 
 if(MSVC)
@@ -1970,7 +1971,7 @@ if(BUILD_PYTHON)
     set_source_files_properties(../aten/src/ATen/native/EmbeddingBag.cpp PROPERTIES COMPILE_FLAGS -Wno-attributes)
     set_source_files_properties(${TORCH_SRC_DIR}/../caffe2/operators/box_with_nms_limit_op.cc PROPERTIES COMPILE_FLAGS -Wno-attributes)
   endif()
-
+  
   # generated pb files are copied from build/caffe2 to caffe2
   # if we copied them back to build this would create a build cycle
   # consider removing the need for globs
