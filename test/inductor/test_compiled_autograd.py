@@ -1,5 +1,6 @@
 # Owner(s): ["module: inductor"]
 import functools
+import io
 import logging
 import re
 import sys
@@ -289,7 +290,7 @@ main()
         param_proxy, activ_proxy = proxies
         buf = activ_proxy * 2
         torch.ops.inductor.accumulate_grad_.default(param_proxy, buf)
-        compiled_fn = compiler.end_capture(buf)
+        runtime_wrapper, compiled_fn = compiler.end_capture(buf)
 
         def bytecode_hook(code, out_code):
             import dis
@@ -326,7 +327,9 @@ main()
         torch._dynamo.reset()
         handle = torch._dynamo.convert_frame.register_bytecode_hook(bytecode_hook)
         try:
-            compiled_fn(inputs=[param, activ], sizes=(), hooks=())
+            runtime_wrapper(
+                compiled_fn=compiled_fn, inputs=[param, activ], sizes=(), hooks=()
+            )
         finally:
             handle.remove()
 
@@ -1489,6 +1492,25 @@ TORCH_LIBRARY(test_autograd_cpp_node_data_dependent, m) {
 
             out = compiled_fn(activations)
             self.assertTrue(len(activations) == 0)
+
+    @unittest.skipIf(not HAS_CUDA, "requires cuda")
+    def test_cudagraphs_cpu_division(self):
+        from torch._dynamo.testing import reduce_to_scalar_loss
+
+        model = torch.nn.Linear(10, 10, dtype=torch.float16).cuda()
+        inputs = torch.randn(10, 10, dtype=torch.float16).cuda()
+        out = model(inputs)
+        loss = reduce_to_scalar_loss(out)
+
+        stderr_msgs = io.StringIO()
+        with mock.patch("sys.stderr", stderr_msgs), compiled_autograd.enable(
+            compiler_fn
+        ):
+            torch._inductor.config.triton.cudagraphs = True
+            loss.backward()
+            torch._inductor.config.triton.cudagraphs = False
+
+        self.assertFalse("skipping cudagraphs" in stderr_msgs.getvalue())
 
     def test_verbose_logs_graph(self):
         torch._logging.set_logs(compiled_autograd_verbose=True)
