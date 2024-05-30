@@ -1620,6 +1620,24 @@ tensor(..., device='meta', size=(1,), requires_grad=True)""")
         finally:
             torch.__future__.set_swap_module_params_on_conversion(False)
 
+    def test_swap_escape_hatches(self):
+        with torch.device('meta'):
+            m = nn.Linear(2, 3)
+
+        m_weight_id = id(m.weight)
+        m_weight_cdata = m.weight._cdata
+        m.to_empty(device='cpu')
+        self.assertTrue(m_weight_id == id(m.weight))
+        self.assertTrue(m_weight_cdata != m.weight._cdata)
+        try:
+            torch.__future__._set_swap_overwrite_escape_hatch(True)
+            m_weight_cdata = m.weight._cdata
+            m.to('meta')
+            self.assertTrue(m_weight_id != id(m.weight))
+            self.assertTrue(m_weight_cdata != m.weight._cdata)
+        finally:
+            torch.__future__._set_swap_overwrite_escape_hatch(False)
+
     def test_type(self):
         l = nn.Linear(10, 20)
         net = nn.Module()

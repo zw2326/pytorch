@@ -1,5 +1,7 @@
 _overwrite_module_params_on_conversion: bool = False
 _swap_module_params_on_conversion: bool = False
+_swap_overwrite_escape_hatch: bool = False
+_swap_load_state_dict_escape_hatch: bool = False
 
 
 def set_overwrite_module_params_on_conversion(value: bool) -> None:
@@ -73,3 +75,41 @@ def get_swap_module_params_on_conversion() -> bool:
     See :func:`~torch.__future__.set_swap_module_params_on_conversion` for more information.
     """
     return _swap_module_params_on_conversion
+
+
+def _set_swap_overwrite_escape_hatch(value: bool) -> None:
+    """
+    Sets whether to fall back to assignment behavior for tensor types that
+    previously used the overwrite module params path instead of using
+    ``swap_tensors``.
+    """
+    global _swap_overwrite_escape_hatch
+    _swap_overwrite_escape_hatch = value
+
+
+def _get_swap_overwrite_escape_hatch() -> bool:
+    """
+    Returns whether to fall back to assignment behavior for tensor types that
+    previously used the overwrite module params path instead of using
+    ``swap_tensors``.
+    """
+    global _swap_overwrite_escape_hatch
+    return _swap_overwrite_escape_hatch
+
+
+def _set_swap_load_state_dict_escape_hatch(value: bool) -> None:
+    """
+    Sets whether to fall back to non swap-tensors behavior in ``nn.Module.load_state_dict``
+    for types that have been opted in.
+    """
+    global _swap_overwrite_escape_hatch
+    _swap_overwrite_escape_hatch = value
+
+
+def _get_swap_load_state_dict_escape_hatch() -> bool:
+    """
+    Returns whether to fall back to non swap-tensors behavior in ``nn.Module.load_state_dict``
+    for types that have been opted in.
+    """
+    global _swap_overwrite_escape_hatch
+    return _swap_overwrite_escape_hatch

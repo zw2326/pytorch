@@ -14,6 +14,8 @@ from typing import Union, Tuple, Any, Callable, Iterator, Set, Optional, overloa
 from typing_extensions import Self
 from ...utils.hooks import RemovableHandle
 from torch.utils._python_dispatch import is_traceable_wrapper_subclass
+from torch.__future__ import _get_swap_overwrite_escape_hatch, get_overwrite_module_params_on_conversion, \
+    get_swap_module_params_on_conversion, _get_swap_load_state_dict_escape_hatch
 
 __all__ = ['register_module_forward_pre_hook', 'register_module_forward_hook',
            'register_module_full_backward_pre_hook', 'register_module_backward_hook',
@@ -778,6 +780,10 @@ class Module:
             for module in self.children():
                 module._apply(fn)
 
+        should_overwrite = get_overwrite_module_params_on_conversion()
+        should_use_swap_tensors = get_swap_module_params_on_conversion()
+        swap_overwrite_escape_hatch = _get_swap_overwrite_escape_hatch()
+
         def compute_should_use_set_data(tensor, tensor_applied):
             if torch._has_compatible_shallow_copy_type(tensor, tensor_applied):
                 # If the new tensor has compatible tensor type as the existing tensor,
@@ -788,20 +794,18 @@ class Module:
                 # `torch.__future__.get_overwrite_module_params_on_conversion()`
                 # global flag to let the user control whether they want the future
                 # behavior of overwriting the existing tensor or not.
-                return not torch.__future__.get_overwrite_module_params_on_conversion()
+                return not should_overwrite
             else:
                 return False
-
-        should_use_swap_tensors = torch.__future__.get_swap_module_params_on_conversion()
 
         def compute_should_use_swap_tensors(tensor, tensor_applied):
             return (should_use_swap_tensors
                     # subclasses may have multiple child tensors so we need to use swap_tensors
                     or is_traceable_wrapper_subclass(tensor_applied)
-                    or tensor.device.type == 'meta'
-                    or tensor_applied.device.type == 'meta'
-                    or tensor.device.type == 'xla'
-                    or tensor_applied.device.type == 'xla')
+                    or ((tensor.device.type == 'meta'
+                         or tensor_applied.device.type == 'meta'
+                         or tensor.device.type == 'xla'
+                         or tensor_applied.device.type == 'xla') and not swap_overwrite_escape_hatch))
 
         for key, param in self._parameters.items():
             if param is None:
@@ -814,7 +818,6 @@ class Module:
             p_should_use_set_data = compute_should_use_set_data(param, param_applied)
 
             p_should_use_swap_tensors = compute_should_use_swap_tensors(param, param_applied)
-
             param_grad = param.grad
             if p_should_use_swap_tensors:
                 try:
@@ -2062,8 +2065,9 @@ class Module:
                                   'corresponding key in the module instead of copying them in place?)')
 
                 use_swap_tensors = (_use_swap_tensors
-                                    or is_traceable_wrapper_subclass(param)
-                                    or is_traceable_wrapper_subclass(input_param))
+                                    or ((is_traceable_wrapper_subclass(param)
+                                        or is_traceable_wrapper_subclass(input_param))
+                                        and not _get_swap_load_state_dict_escape_hatch()))
                 try:
                     with torch.no_grad():
                         if use_swap_tensors:

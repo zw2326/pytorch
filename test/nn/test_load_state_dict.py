@@ -19,6 +19,7 @@ from torch.testing._internal.common_utils import (
     TEST_NUMPY,
     TestCase,
 )
+from torch.utils._python_dispatch import is_traceable_wrapper_subclass
 from torch.utils._pytree import tree_map
 
 if TEST_NUMPY:
@@ -604,7 +605,9 @@ class MyWrapperLoadTensor(MyLoadTensor):
 
 
 class TestLoadStateDictSwap(TestCase):
-    def _test_load_subclasses(self, m_subclass=None, sd_subclass=None, assign=False):
+    def _test_load_subclasses(
+        self, m_subclass=None, sd_subclass=None, assign=False, swap_escape_hatch=False
+    ):
         """
         Tests that the model and state_dict are loaded correctly when
         model has parameters of type m_subclass and state_dict has valuse
@@ -624,8 +627,10 @@ class TestLoadStateDictSwap(TestCase):
             return m
 
         m = _create_model(m_subclass)
+        m_weight_id = id(m.weight)
         sd = _create_model(sd_subclass).state_dict()
         m.load_state_dict(sd, assign=assign)
+        m_weight_id_after = id(m.weight)
         self.assertEqual(m.weight, sd["weight"])
         self.assertEqual(m.buf, sd["buf"])
         self.assertTrue(isinstance(m.weight, torch.nn.Parameter))
@@ -641,6 +646,14 @@ class TestLoadStateDictSwap(TestCase):
 
         self.assertTrue(type(m.weight) is weight_type)
         self.assertTrue(type(m.buf) is buf_type)
+
+        if is_traceable_wrapper_subclass(m_subclass) and is_traceable_wrapper_subclass(
+            sd_subclass
+        ):
+            if swap_escape_hatch:
+                self.assertTrue(m_weight_id == m_weight_id_after)
+            else:
+                self.assertTrue(m_weight_id != m_weight_id_after)
 
     @skipIfCrossRef
     @skipIfTorchDynamo("Can't swap with dynamo as dynamo installs weakrefs")
@@ -678,6 +691,11 @@ class TestLoadStateDictSwap(TestCase):
         ]
         for m_s, sd_s in subclasses:
             self._test_load_subclasses(m_s, sd_s, assign)
+
+        # Test that the escape hatch works
+        self._test_load_subclasses(
+            MyWrapperLoadTensor, MyWrapperLoadTensor, swap_escape_hatch=True
+        )
 
 
 instantiate_parametrized_tests(TestLoadStateDict)
