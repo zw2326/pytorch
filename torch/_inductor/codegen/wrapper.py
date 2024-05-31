@@ -851,7 +851,6 @@ class WrapperCodeGen(CodeGen):
             f"{kernel_name}.run({', '.join(args)}, grid={grid}, stream={stream_name})"
         )
 
-    # @Yueming TODO: fix this
     def generate_scatter_fallback(
         self,
         output,
@@ -861,6 +860,7 @@ class WrapperCodeGen(CodeGen):
         src_is_tensor,
         reduce,
         kwargs,
+        origin_node=None
     ):
         line = f"{python_kernel_name}({','.join(map(str, inputs))}"
         if python_kernel_name.startswith("aten.scatter_reduce"):
@@ -869,7 +869,10 @@ class WrapperCodeGen(CodeGen):
             if reduce:
                 line += f", reduce={repr(reduce)}"
         line += ")"
-        self.writeline(line)
+        if config.multiple_streams:
+            self.generate_extern_kernel_w_stream(origin_node.get_name(), line)
+        else:
+            self.writeline(line)
 
     # @Yueming TODO: fix this
     def generate_index_put_fallback(self, kernel, x, indices, values, accumulate):

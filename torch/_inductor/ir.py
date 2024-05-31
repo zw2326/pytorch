@@ -4991,6 +4991,7 @@ class ScatterFallback(ExternKernel):
             self.src_is_tensor,
             reduce,
             self.codegen_kwargs(),
+            origin_node=self
         )
 
     def should_allocate(self):
