@@ -3,6 +3,7 @@ import warnings
 from typing import Any, Dict, List, Optional, Union
 
 import torch.nn
+from torch._C._functorch import is_functorch_wrapped_tensor
 
 from . import utils, variables
 from .bytecode_transformation import (
@@ -21,6 +22,7 @@ from .variables.base import (
     MutableLocalSource,
     VariableTracker,
 )
+from .variables.tensor import TensorVariable
 
 
 class MutableSideEffects(MutableLocalBase):
@@ -204,6 +206,20 @@ class SideEffects:
             return item.mutable_local in self.store_attr_mutations
         return item.mutable_local.is_modified
 
+    def is_functorch_tensor(self, item):
+        # Fix Pytorch issues #126882 and #125078
+        # don't add item as output if it is a functorch wrapped tensor
+        check = False
+
+        def visit(var: VariableTracker):
+            nonlocal check
+            if isinstance(var, TensorVariable):
+                example_value = var.proxy.node.meta["example_value"]
+                check = is_functorch_wrapped_tensor(example_value)
+
+        VariableTracker.visit(visit, item)
+        return check
+
     def _track_obj(
         self,
         item: Any,
@@ -301,7 +317,13 @@ class SideEffects:
                 isinstance(var.mutable_local, AttributeMutationNew)
                 and var.mutable_local is not skip_obj
             ):
-                live_new_objects.add(var.mutable_local)
+                is_valid_tensor = True
+                value = self.store_attr_mutations.get(var.mutable_local)
+                if value and bool(value.get("cell_contents")):
+                    content = value["cell_contents"]
+                    is_valid_tensor = not self.is_functorch_tensor(content)
+                if is_valid_tensor:
+                    live_new_objects.add(var.mutable_local)
 
         def is_live(var: Union[MutableLocalBase, VariableTracker]):
             if isinstance(var, AttributeMutationNew):
@@ -331,7 +353,14 @@ class SideEffects:
             var.mutable_local = MutableSideEffects(var.mutable_local.source, True)
 
     def _get_modified_vars(self):
-        return [var for var in self.id_to_variable.values() if self.is_modified(var)]
+        # Some packages like pytest can be updated during runtime. So, make a
+        # copy of id_to_variables.values() to avoid issues like
+        # "RuntimeError: dictionary changed size during iteration"
+        return [
+            var
+            for var in list(self.id_to_variable.values())
+            if self.is_modified(var) and not self.is_functorch_tensor(var)
+        ]
 
     def codegen_save_tempvars(self, cg: PyCodegen):
         for var in self._get_modified_vars():
