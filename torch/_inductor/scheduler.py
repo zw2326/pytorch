@@ -34,7 +34,7 @@ from torch.fx.experimental.symbolic_shapes import free_unbacked_symbols
 from torch.utils._sympy.symbol import free_symbol_is_type, SymT
 from torch.utils._triton import has_triton
 
-from . import comms, config, dependencies, ir, metrics
+from . import comms, config, dependencies, ir, metrics, stream_scheduler
 from .codecache import write_text
 from .codegen.common import get_scheduling_for_device, Kernel
 from .comm_analysis import estimate_nccl_collective_runtime

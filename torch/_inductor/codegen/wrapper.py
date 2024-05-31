@@ -367,7 +367,6 @@ class AllocateLine(MemoryPlanningLine):
     def codegen(self, code: IndentedBuffer) -> None:
         assert self.node.get_name() not in V.graph.removed_buffers
         line = self.wrapper.make_buffer_allocation(self.node)
-        code.writeline(line)
         # if self has attribution named user_streams, it is used by multiple streams
         if hasattr(self, "user_streams"):
             # the redundant stream_id have been removed when user_streams is set
@@ -1608,9 +1607,9 @@ class WrapperCodeGen(CodeGen):
         if cuda:
             call_args_str = ", ".join(pexpr(item) for item in call_args)
             # @Yueming WARNING TODO: check if this is correct
-            # current_device = V.graph.scheduler.get_current_device_or_throw()
-            # stream_name = self.write_get_raw_stream(current_device.index, V.graph)
-            stream_name = f"stream{stream_id}"
+            current_device = V.graph.scheduler.get_current_device_or_throw()
+            stream_name = self.write_get_raw_stream(current_device.index, V.graph)
+            # stream_name = f"stream{stream_id}"
             if triton:
                 grid_str = ", ".join(pexpr(item) for item in grid)
                 grid_str = f"{grid_fn}({grid_str})"
