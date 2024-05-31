@@ -28,7 +28,8 @@ from torch._prims_common import dtype_to_type
 from .functions import (
     _keep_float,
     FloatTrueDiv,
-    FloorDiv,
+    PythonFloorDiv,
+    NaturalDiv,
     IntTrueDiv,
     OpaqueUnaryFn_exp,
     OpaqueUnaryFn_log,
@@ -37,7 +38,6 @@ from .functions import (
     RoundDecimal,
     RoundToInt,
     safe_pow,
-    ToFloat,
     TruncToFloat,
     TruncToInt,
 )
@@ -417,12 +417,6 @@ class SymPyValueRangeAnalysis:
         return r
 
     @staticmethod
-    def to_dtype(a, dtype, src_dtype=None):
-        if dtype == torch.float64:
-            return ValueRanges.increasing_map(a, ToFloat)
-        return ValueRanges.unknown()
-
-    @staticmethod
     def trunc_to_int(a, dtype):
         return ValueRanges.increasing_map(a, TruncToInt)
 
@@ -544,7 +538,7 @@ class SymPyValueRangeAnalysis:
         ):
             return ValueRanges.unknown()
         else:
-            return ValueRanges.coordinatewise_monotone_map(a, b, FloorDiv)
+            return ValueRanges.coordinatewise_monotone_map(a, b, PythonFloorDiv)
 
     @classmethod
     def mod(cls, x, y):
@@ -880,44 +874,6 @@ class SymPyValueRangeAnalysis:
     def trunc(x):
         return ValueRanges.increasing_map(x, TruncToFloat)
 
-
-class ValueRangeAnalysis(SymPyValueRangeAnalysis):
-    def __init__(self):
-        self.name = "ValueRangeAnalysis"
-        boolean_operators = (
-            "xor",
-            "logical_and",
-            "logical_or",
-            "logical_not",
-        )
-        for op in boolean_operators:
-            setattr(self, op, self.bool_handler)
-
-    @staticmethod
-    def bool_handler(*args, **kwargs):
-        # just assuming bools can have both values
-        return ValueRanges(sympy.false, sympy.true)  # type: ignore[arg-type]
-
-    @staticmethod
-    def default_handler(*args, **kwargs):
-        # many ops are unlikely to show up in optimizable indexing compute,
-        # so we dont have full coverage
-        return ValueRanges.unknown()
-
-    def load(self, name: str, index: sympy.Expr):
-        return ValueRanges.unknown()
-
-    def store(self, name, index, value, mode=None):
-        return
-
-    def reduction(self, name, dtype, src_dtype, reduction_type, index, value):
-        return ValueRanges.unknown()
-
-    @classmethod
-    def index_expr(cls, index, dtype):
-        assert isinstance(index, ValueRanges)
-        return cls.to_dtype(index, dtype)
-
     @staticmethod
     def to_dtype(x, dtype: torch.dtype, src_dtype: Optional[torch.dtype] = None):
         x = ValueRanges.wrap(x)
@@ -971,6 +927,44 @@ class ValueRangeAnalysis(SymPyValueRangeAnalysis):
     @classmethod
     def sub(cls, a, b):
         return cls.add(a, cls.neg(b))
+
+
+class ValueRangeAnalysis(SymPyValueRangeAnalysis):
+    def __init__(self):
+        self.name = "ValueRangeAnalysis"
+        boolean_operators = (
+            "xor",
+            "logical_and",
+            "logical_or",
+            "logical_not",
+        )
+        for op in boolean_operators:
+            setattr(self, op, self.bool_handler)
+
+    @staticmethod
+    def bool_handler(*args, **kwargs):
+        # just assuming bools can have both values
+        return ValueRanges(sympy.false, sympy.true)  # type: ignore[arg-type]
+
+    @staticmethod
+    def default_handler(*args, **kwargs):
+        # many ops are unlikely to show up in optimizable indexing compute,
+        # so we dont have full coverage
+        return ValueRanges.unknown()
+
+    def load(self, name: str, index: sympy.Expr):
+        return ValueRanges.unknown()
+
+    def store(self, name, index, value, mode=None):
+        return
+
+    def reduction(self, name, dtype, src_dtype, reduction_type, index, value):
+        return ValueRanges.unknown()
+
+    @classmethod
+    def index_expr(cls, index, dtype):
+        assert isinstance(index, ValueRanges)
+        return cls.to_dtype(index, dtype)
 
     def __getattr__(self, name):
         log.debug("unhandled ValueRange op %s", name)

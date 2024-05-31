@@ -174,6 +174,8 @@ try:
 
         # Python semantics for 'FloorDiv' states that before applying the floor
         # function, the operands are converted to their common type.
+        # TODO: Integer division can be implemented directly without casting
+        # to real and this would be more efficient for Z3 to solve
         def floordiv(self, numerator: z3.ArithRef, denominator: z3.ArithRef) -> z3.ArithRef:
             cast_result_to_real = numerator.is_real() or denominator.is_real()
             result = _Z3Ops.to_int(self.div(numerator, denominator))
@@ -374,6 +376,10 @@ try:
             return self._ops.div(numerator, denominator)
 
         def floordiv(self, numerator: z3.ArithRef, denominator: z3.ArithRef) -> z3.ArithRef:
+            return self._ops.floordiv(numerator, denominator)
+
+        def truncdiv(self, numerator: z3.ArithRef, denominator: z3.ArithRef) -> z3.ArithRef:
+            # TODO: This is wrong
             return self._ops.floordiv(numerator, denominator)
 
         def div(self, numerator: z3.ArithRef, denominator: z3.ArithRef) -> z3.ArithRef:
