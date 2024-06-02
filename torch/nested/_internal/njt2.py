@@ -2,6 +2,7 @@ import torch
 import itertools
 from torch import Tensor
 from typing import List, Optional, Tuple
+from . import ops
 
 NJT_OPS = {}
 
@@ -195,7 +196,7 @@ def extract_kwargs(arg):
     torch.mul,
     torch.div,
 ])
-def jagged_binary_pointwise(func, input, other, *, out=None, **kwargs):
+def _(func, input, other, *, out=None, **kwargs):
     a = input
     b = other
     assert isinstance(a, NJT2) or isinstance(b, NJT2)
@@ -205,128 +206,15 @@ def jagged_binary_pointwise(func, input, other, *, out=None, **kwargs):
         # unary case
         return njt_like(input, func(input._values, other, **kwargs))
 
-    mismatch_error_msg = (
-        "cannot call binary pointwise function {} with inputs of shapes {} and {}"
-    )
-    # a is NT, b is NT
-    if isinstance(a, NJT2) and isinstance(b, NJT2):
-        # ex: (B, j0, D) + (B, j0, D)
-        # ex: (B, j0, D) + (B, j0, 1)
-        if raggedness_matches(a, b._size):
-            return njt_like(
-                a,
-                func(a._values, b._values, **kwargs)
-            )
-        raise RuntimeError(mismatch_error_msg.format(func.__name__, a._size, b._size))
-    # either a is NT or b is NT at this point
-    a_is_nt = isinstance(a, NJT2)
-    extracted_kwargs = extract_kwargs(a) if a_is_nt else extract_kwargs(b)
+    return ops.jagged_binary_pointwise(NJT2, func, input, other, **kwargs)
 
-    # === Handle broadcasting across the batch / ragged dims ===
-
-    # Easy case: take advantage of pre-existing broadcasting logic
-    # ex: (B, j0, ?, ?) + (?) -> (B, j0, ?, ?)
-    # ex: (B, j0, ?, ?) + (?, ?) -> (B, j0, ?, ?)
-    # ex: (B, j0, ?, ?) + (1, 1, ?, ?) -> (B, j0, ?, ?)
-    nt, t = (a, b) if a_is_nt else (b, a)
-    # See Note: [ Squeezing leading ones ]
-    if t.dim() > nt.dim():
-        raise NotImplementedError("NYI: broadcasting NT with T with larger dim")
-    t_squeezed = squeeze_leading_ones(t)
-    if nt.dim() >= t_squeezed.dim() + 2:
-        lhs, rhs = (nt._values, t_squeezed) if a_is_nt else (t_squeezed, nt._values)
-        return NJT2(func(lhs, rhs, **kwargs), **extracted_kwargs)
-
-    # Harder case: do manual broadcasting over unbound components
-    # when NT dim == non-NT dim
-    # ex: (B, j0, D_0, D_1) + (B, 1, D_0, D_1) -> (B, j0, D_0, D_1)
-    if a.dim() == b.dim():
-        # ex: (B, j0, D_0, D_1) + (1, 1, D_0, D_1) -> should
-        # be (B, j0, D_0, D_1) but not yet supported
-        if a.shape[0] != b.shape[0]:
-            raise RuntimeError(
-                mismatch_error_msg.format(func.__name__, a.shape, b.shape)
-            )
-
-        # need to use offsets to broadcast across ragged dim properly
-        # NB: inefficient fallback here; Triton codegen can help this
-        # TODO: Make this work with autograd
-        outputs = []
-        for a_comp, b_comp in zip(a.unbind(), b.unbind()):
-            outputs.append(func(a_comp, b_comp, **kwargs))
-        new_values = torch.cat(outputs, dim=0)
-        return NJT2(new_values, **extracted_kwargs)
 
 import math
 import torch.nn.functional as F
 
 @register_njt2(torch.chunk)
-def chunk_default(func, inputs, chunks, dim=0):
-    new_kwargs = {
-        "input": inputs,
-        "chunks": chunks,
-        "dim": dim,
-    }
-
-    inp = new_kwargs.pop("input")
-
-    new_kwargs["dim"] = _wrap_jagged_dim(
-        inp.dim(), new_kwargs["dim"], "chunk", allow_batch_dim=True
-    )
-
-    if new_kwargs["dim"] == 0:
-        chunks = new_kwargs["chunks"]
-        dim0_size = inp._size[0]
-        chunk_size = math.ceil(dim0_size / chunks)
-
-        # get _offsets of the chunks
-        lengths = inp._offsets.diff()
-        chunked_lengths = lengths.chunk(chunks)
-        chunked_offsets = [torch.cumsum(x, dim=0) for x in chunked_lengths]
-        chunked_offsets = [F.pad(x, (1, 0), value=0) for x in chunked_offsets]
-        nested_kwargs = [
-            {"offsets": per_offsets, "ragged_idx": inp._ragged_idx}
-            for per_offsets in chunked_offsets
-        ]
-
-        # get _values of the chunks
-        split_sizes = [x.sum().item() for x in chunked_lengths]
-        chunk_values = inp._values.split(split_sizes)
-
-        return [
-            NJT2(values=chunk_values[i], **(nested_kwargs[i]))
-            for i in range(0, chunk_size)
-        ]
-    else:
-        return [
-            NJT2(values=x, **extract_kwargs(inp))
-            for x in func(inp._values, **new_kwargs)
-        ]
-
-
-def squeeze_leading_ones(t):
-    # Note: [ Squeezing leading ones ]
-    #
-    # Squeeze leading ones from t.
-    #
-    # We want:
-    #   (B, j0, ?, ?) + (1, 1, ?, ?) -> (B, j0, ?, ?)
-    #   (B, j0, ?, ?) + (1, 1, 1, ?, ?) -> (1, B, j0, ?, ?)  (not yet supported)
-    #
-    # 1) Squeeze extra ones and grab values from NT
-    #   (1, 1, ?, ?) -> (?, ?)   and   (sum(*), ?, ?) -> (B, j0, ?, ?)
-    # 2) Do dense broadcasting:
-    #   (sum(*), ?, ?) + (?, ?) -> (sum(*), ?, ?)
-    # 3) Construct nested tensor
-    #   (sum(*), ?, ?) -> (B, j0, ?, ?)
-    #
-    # If unsqueezing on the 0th dim becomes supported, we would unsqueeze
-    # at step (4) and we would need to update this function to record how
-    # many ones we unsqueezed.
-    while t.shape[0] == 1:
-        t = t.squeeze(0)
-    return t
-
+def _(func, inputs, chunks, dim=0):
+    return ops.chunk_default(NJT2, func, inputs=inputs, chunks=chunks, dim=dim)
 
 # unary pointwise
 @register_njt2([
@@ -364,14 +252,7 @@ def _(func, input, dim=0):
         values[offsets[i] : (offsets[i] + lengths[i])] for i in range(lengths.shape[0])
     ]
 
-# Simplifying assumption: we assume that the batch dim is always the left-most
-# dim, and the ragged dim is always the second dim.
-def _outer_to_inner_dim(ndim, dim):
-    assert dim >= 0 and dim < ndim
-    return 0 if dim < 2 else dim - 1
 
-from torch.nested._internal.ops import _wrap_jagged_dim
-from . import ops
 
 @register_njt2(torch.transpose)
 def transpose(func, input, dim0, dim1):

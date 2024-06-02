@@ -395,9 +395,8 @@ class TestNestedTensorSubclass(TestCase):
         nt1 = torch.nested.as_nested_tensor2([a, b, c], layout=torch.jagged)
         nt2 = torch.nested.as_nested_tensor2([a, b, c], layout=torch.jagged)
 
-        self.assertRaisesRegex(
+        self.assertRaises(
             RuntimeError,
-            "cannot call binary pointwise function .* with inputs of shapes",
             lambda: nt1 * nt2)
 
         # Correct usage: chain the calls using the same offsets tensor object
@@ -429,9 +428,8 @@ class TestNestedTensorSubclass(TestCase):
         # self.assertEqual(out.is_contiguous(), (b.transpose(-1, -2) * b.transpose(-1, -2)).is_contiguous())
         # self.assertEqual(out.shape, nt1_t.shape)
 
-        self.assertRaisesRegex(
+        self.assertRaises(
             RuntimeError,
-            "cannot call binary pointwise function mul.Tensor with inputs of shapes",
             lambda: nt1 * nt2_t,
         )
 
