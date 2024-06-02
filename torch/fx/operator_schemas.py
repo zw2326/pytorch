@@ -284,6 +284,9 @@ def normalize_function(
 
         Returns normalized_args_and_kwargs, or `None` if not successful.
     """
+    # TODO(rzou): should probably be its own function
+    if normalize_to_only_use_kwargs and len(args) == 0:
+        return (), kwargs
     if kwargs is None:
         kwargs = {}
     new_args_and_kwargs = None

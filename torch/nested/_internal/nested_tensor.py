@@ -289,6 +289,8 @@ class ViewNestedFromBuffer(torch.autograd.Function):
 def buffer_from_jagged(jagged):
     return ViewBufferFromNested.apply(jagged)
 
+def jagged_from_list2(*args, **kwargs):
+    return jagged_from_list(*args, **kwargs, njt2=True)
 
 # Need to make it obvious that users should be passing in offsets
 def jagged_from_list(
@@ -296,6 +298,7 @@ def jagged_from_list(
     offsets: Optional[torch.Tensor],
     dtype=None,
     device=None,
+    njt2=False,
 ) -> Tuple[NestedTensor, torch.Tensor]:
     """Constructs a NestedTensor backed by jagged layout from a list of tensors"""
 
@@ -341,6 +344,11 @@ def jagged_from_list(
                 torch.tensor([s[0] for s in sizes], device=values.device).cumsum(dim=0),
             ]
         )
+
+    if njt2:
+        from .njt2 import NJT2
+        ret_njt = NJT2(values, offsets)
+        return ret_njt, offsets
 
     ret_nt = nested_view_from_values_offsets(values, offsets)
     ret_nt._metadata_cache = {

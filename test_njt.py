@@ -44,22 +44,22 @@ from torch.testing._internal.common_utils import (
     TEST_WITH_ROCM,
     TestCase,
 )
-
 from torch.nested._internal.nested_tensor import (
     buffer_from_jagged,
-    jagged_from_list,
+    jagged_from_list2,
     NestedTensor,
     nested_view_from_values_offsets,
     ViewNestedFromBuffer,
 )
-import njt
+
+from torch.nested._internal import njt2
 
 # Tests are ported from pytorch/nestedtensor.
-# This makes porting as_nested_tensor easier in the future.
+# This makes porting as_nested_tensor2 easier in the future.
 
 
 def _iter_constructors():
-    # yield as_nested_tensor
+    # yield as_nested_tensor2
     yield torch.nested.nested_tensor
 
 # Helper function to generate a pair of random nested tensors
@@ -77,10 +77,10 @@ def random_nt_noncontiguous_pair(ragged_sizes, device="cpu", dtype=torch.float16
     ys = []
     for x in xs:
         ys.append(x.transpose(-1, -2))
-    nt_contiguous = torch.nested.nested_tensor(ys)
+    nt_contiguous = torch.nested.nested_tensor2(ys)
     # noncontiguous nested tensor
     n = len(ragged_sizes)
-    nt_noncontiguous = torch.nested.nested_tensor(xs).transpose(-1, -2)
+    nt_noncontiguous = torch.nested.nested_tensor2(xs).transpose(-1, -2)
     return nt_contiguous, nt_noncontiguous
 
 # Helper functions to pad a noncontiguous nested tensor
@@ -178,7 +178,7 @@ def random_nt(device, dtype, num_tensors, max_dims, min_dims=None, layout=torch.
         t1 = torch.randn(tensor_dims, device=device, dtype=dtype)
         ts1.append(t1)
 
-    return torch.nested.nested_tensor(ts1, device=device, dtype=dtype, layout=layout)
+    return torch.nested.nested_tensor2(ts1, device=device, dtype=dtype, layout=layout)
 
 
 # Alternate approach to generating a random NT.
@@ -189,7 +189,7 @@ def random_nt_from_dims(dims, device=None, dtype=None, layout=torch.strided, req
         [d if d is not None else torch.randint(2, 10, size=(1,)).item() for d in dims[1:]]
         for d in range(dims[0])
     ]
-    return torch.nested.nested_tensor([
+    return torch.nested.nested_tensor2([
         torch.randn(*size) for size in sizes
     ], device=device, dtype=dtype, layout=layout, requires_grad=requires_grad)
 
@@ -213,7 +213,7 @@ def random_nt_from_similar(other, dims=None):
                 ret_size.append(d)
         ret_sizes.append(ret_size)
 
-    return torch.nested.nested_tensor([
+    return torch.nested.nested_tensor2([
         torch.randn(*size) for size in ret_sizes
     ], device=other.device)
 
@@ -310,7 +310,7 @@ class TestNestedTensorSubclass(TestCase):
         a = torch.randn(2, 3, requires_grad=True, dtype=torch.float64, device=device)
         b = torch.randn(3, 3, requires_grad=True, dtype=torch.float64, device=device)
         c = torch.randn(4, 3, requires_grad=True, dtype=torch.float64, device=device)
-        nt = torch.nested.as_nested_tensor([a, b, c], layout=torch.jagged)
+        nt = torch.nested.as_nested_tensor2([a, b, c], layout=torch.jagged)
         _offsets = nt.offsets()
 
         for op in (
@@ -341,7 +341,7 @@ class TestNestedTensorSubclass(TestCase):
         weight = torch.randn(4, 3, requires_grad=True, dtype=torch.float64, device=device)
 
         def grad_test_func(a, b, c, weight):
-            nt = torch.nested.as_nested_tensor([a, b, c], layout=torch.jagged)
+            nt = torch.nested.as_nested_tensor2([a, b, c], layout=torch.jagged)
             out = torch.nn.functional.linear(nt, weight)
             return out.values()
 
@@ -353,7 +353,7 @@ class TestNestedTensorSubclass(TestCase):
         c = torch.randn(4, 3, requires_grad=True, dtype=torch.float64, device=device)
 
         def grad_test_func(a, b, c):
-            nt = torch.nested.as_nested_tensor([a, b, c], layout=torch.jagged)
+            nt = torch.nested.as_nested_tensor2([a, b, c], layout=torch.jagged)
             out = torch.nn.functional.silu(nt.sin().cos())
             return out.values()
 
@@ -364,7 +364,7 @@ class TestNestedTensorSubclass(TestCase):
             torch.randn(i + 2, 5, requires_grad=True, dtype=torch.float64, device=device) for i in range(3)
         )
 
-        nt = torch.nested.nested_tensor([a.detach(), b.detach(), c.detach()], layout=torch.jagged)
+        nt = torch.nested.nested_tensor2([a.detach(), b.detach(), c.detach()], layout=torch.jagged)
         nt_t = nt.transpose(1, 2)
         self.assertFalse(nt_t.is_contiguous())
         out = torch.nn.functional.silu(nt_t.sin().cos())
@@ -377,7 +377,7 @@ class TestNestedTensorSubclass(TestCase):
         )
 
         def grad_test_func(a, b, c):
-            nt = torch.nested.as_nested_tensor([a, b, c], layout=torch.jagged)
+            nt = torch.nested.as_nested_tensor2([a, b, c], layout=torch.jagged)
             nt_t = nt.transpose(1, 2)
             out = torch.nn.functional.silu(nt_t.sin().cos())
             return out.values()
@@ -392,8 +392,8 @@ class TestNestedTensorSubclass(TestCase):
 
         # Incorrect usage: shape check will fail if the offsets tensor are not
         #                  the same exact tensor object
-        nt1 = torch.nested.as_nested_tensor([a, b, c], layout=torch.jagged)
-        nt2 = torch.nested.as_nested_tensor([a, b, c], layout=torch.jagged)
+        nt1 = torch.nested.as_nested_tensor2([a, b, c], layout=torch.jagged)
+        nt2 = torch.nested.as_nested_tensor2([a, b, c], layout=torch.jagged)
 
         self.assertRaisesRegex(
             RuntimeError,
@@ -402,11 +402,12 @@ class TestNestedTensorSubclass(TestCase):
 
         # Correct usage: chain the calls using the same offsets tensor object
         def grad_test_func(a, b, c):
-            nt1 = torch.nested.as_nested_tensor([a, b, c], layout=torch.jagged)
-            nt2 = torch.nested.as_nested_tensor([a, b, c], layout=torch.jagged)
+            nt1 = torch.nested.as_nested_tensor2([a, b, c], layout=torch.jagged)
+            nt2 = torch.nested.as_nested_tensor2([a, b, c], layout=torch.jagged)
             nt2._offsets = nt1._offsets
+            nt2._nested_int = nt1._nested_int
             # TODO: Switch to public API that takes in (values, offsets) once it exists
-            # nt2, offsets = jagged_from_list([a, b, c], nt1.offsets())
+            # nt2, offsets = jagged_from_list2([a, b, c], nt1.offsets())
             out = nt1 * nt2
             return out.values()
 
@@ -417,8 +418,8 @@ class TestNestedTensorSubclass(TestCase):
             torch.randn(i + 2, 5, dtype=torch.float64, device=device) for i in range(3)
         )
 
-        nt1, offsets = jagged_from_list([a, b, c], None)
-        nt2, offsets = jagged_from_list([a, b, c], offsets)
+        nt1, offsets = jagged_from_list2([a, b, c], None)
+        nt2, offsets = jagged_from_list2([a, b, c], offsets)
 
         nt1_t = nt1.transpose(1, 2)
         nt2_t = nt2.transpose(1, 2)
@@ -440,8 +441,8 @@ class TestNestedTensorSubclass(TestCase):
 
         # Correct usage: chain the calls using the same offsets tensor object
         def grad_test_func(a, b, c):
-            nt1, offsets = jagged_from_list([a, b, c], None)
-            nt2, offsets = jagged_from_list([a, b, c], offsets)
+            nt1, offsets = jagged_from_list2([a, b, c], None)
+            nt2, offsets = jagged_from_list2([a, b, c], offsets)
             nt1_t = nt1.transpose(1, 2)
             nt2_t = nt2.transpose(1, 2)
             out = nt1_t * nt2_t
@@ -454,16 +455,16 @@ class TestNestedTensorSubclass(TestCase):
         b = torch.randn(3, 3, requires_grad=True, dtype=torch.float64, device=device)
         c = torch.randn(4, 3, requires_grad=True, dtype=torch.float64, device=device)
 
-        nt = torch.nested.as_nested_tensor([a, b, c], layout=torch.jagged)
+        nt = torch.nested.as_nested_tensor2([a, b, c], layout=torch.jagged)
         out = torch.split(nt, 2, -1)
         self.assertEqual(len(out), 2)
         self.assertEqual(
             out[0],
-            torch.nested.as_nested_tensor([a[:, 0:2], b[:, 0:2], c[:, 0:2]], layout=torch.jagged)
+            torch.nested.as_nested_tensor2([a[:, 0:2], b[:, 0:2], c[:, 0:2]], layout=torch.jagged)
         )
         self.assertEqual(
             out[1],
-            torch.nested.as_nested_tensor([a[:, 2:], b[:, 2:], c[:, 2:]], layout=torch.jagged)
+            torch.nested.as_nested_tensor2([a[:, 2:], b[:, 2:], c[:, 2:]], layout=torch.jagged)
         )
 
         with self.assertRaisesRegex(
@@ -477,16 +478,16 @@ class TestNestedTensorSubclass(TestCase):
         b = torch.randn(3, 3, requires_grad=True, dtype=torch.float64, device=device)
         c = torch.randn(4, 3, requires_grad=True, dtype=torch.float64, device=device)
 
-        nt = torch.nested.as_nested_tensor([a, b, c], layout=torch.jagged)
+        nt = torch.nested.as_nested_tensor2([a, b, c], layout=torch.jagged)
         out = torch.split(nt, [1, 2], -1)
         self.assertEqual(len(out), 2)
         self.assertEqual(
             out[0],
-            torch.nested.as_nested_tensor([a[:, 0:1], b[:, 0:1], c[:, 0:1]], layout=torch.jagged)
+            torch.nested.as_nested_tensor2([a[:, 0:1], b[:, 0:1], c[:, 0:1]], layout=torch.jagged)
         )
         self.assertEqual(
             out[1],
-            torch.nested.as_nested_tensor([a[:, 1:], b[:, 1:], c[:, 1:]], layout=torch.jagged)
+            torch.nested.as_nested_tensor2([a[:, 1:], b[:, 1:], c[:, 1:]], layout=torch.jagged)
         )
         with self.assertRaisesRegex(
             RuntimeError,
@@ -658,7 +659,7 @@ class TestNestedTensorSubclass(TestCase):
         )
 
         def grad_test_func(t, *ts):
-            nt = torch.nested.as_nested_tensor(list(ts), layout=torch.jagged)
+            nt = torch.nested.as_nested_tensor2(list(ts), layout=torch.jagged)
             out = nt + t
             return out.values()
 
@@ -670,8 +671,8 @@ class TestNestedTensorSubclass(TestCase):
         ts1 = self._get_list_for_jagged_tensor(((2, 3, 4), 16), device=device, requires_grad=False)
         ts2 = self._get_list_for_jagged_tensor(((2, 3, 4), 16), device=device, requires_grad=False)
 
-        nt1, offsets = jagged_from_list(ts1, None)
-        nt2, offsets = jagged_from_list(ts2, offsets)
+        nt1, offsets = jagged_from_list2(ts1, None)
+        nt2, offsets = jagged_from_list2(ts2, offsets)
         buf1 = nt1.values().detach().clone()
         buf2 = nt2.values().detach().clone()
 
@@ -702,11 +703,11 @@ class TestNestedTensorSubclass(TestCase):
                 with self.assertRaisesRegex(
                         RuntimeError,
                         "applying over the ragged dimension, but not the batch dimension"):
-                    nt = torch.nested.as_nested_tensor(ts, layout=torch.jagged)
+                    nt = torch.nested.as_nested_tensor2(ts, layout=torch.jagged)
                     out = torch.sum(nt, dim=rd, keepdim=keepdim)
                 continue
 
-            nt = torch.nested.as_nested_tensor(ts, layout=torch.jagged)
+            nt = torch.nested.as_nested_tensor2(ts, layout=torch.jagged)
             out = torch.sum(nt, dim=rd, keepdim=keepdim)
             ref_shape = ref_shape_keepdim if keepdim else ref_shape_no_keepdim
             self.assertEqual(len(out.shape), len(ref_shape))
@@ -718,7 +719,7 @@ class TestNestedTensorSubclass(TestCase):
 
         # Check values correctness
         # raggedness not reduced
-        nt = torch.nested.as_nested_tensor(ts, layout=torch.jagged)
+        nt = torch.nested.as_nested_tensor2(ts, layout=torch.jagged)
         out = torch.sum(nt, dim=(2, 3), keepdim=keepdim)
         out_ref = torch.sum(nt.values(), dim=(1, 2))
         self.assertIsInstance(out, NestedTensor)
@@ -726,7 +727,7 @@ class TestNestedTensorSubclass(TestCase):
         self.assertTrue(torch.allclose(out.values().view(-1), out_ref.view(-1)))
 
         # raggedness reduced away
-        nt = torch.nested.as_nested_tensor(ts, layout=torch.jagged)
+        nt = torch.nested.as_nested_tensor2(ts, layout=torch.jagged)
         out = torch.sum(nt, dim=(0, 1), keepdim=keepdim)
         out_ref = torch.sum(nt.values(), dim=(0,))
         self.assertNotIsInstance(out, NestedTensor)
@@ -798,7 +799,7 @@ class TestNestedTensorSubclass(TestCase):
             self, device, dtype, requires_grad, components_require_grad):
         for tensor_list in self._get_example_tensor_lists(
                 include_list_of_lists=True, include_requires_grad=components_require_grad):
-            nt = torch.nested.nested_tensor(
+            nt = torch.nested.nested_tensor2(
                 tensor_list,
                 device=device,
                 dtype=dtype,
@@ -821,10 +822,10 @@ class TestNestedTensorSubclass(TestCase):
     @parametrize("components_require_grad", [False, True])
     def test_jagged_layout_construction_as_nested_tensor(
             self, device, dtype, components_require_grad):
-        # NB: as_nested_tensor(tensor_list) doesn't support lists of lists for tensor_list
+        # NB: as_nested_tensor2(tensor_list) doesn't support lists of lists for tensor_list
         for tensor_list in self._get_example_tensor_lists(
                 include_list_of_lists=False, include_requires_grad=components_require_grad):
-            nt = torch.nested.as_nested_tensor(
+            nt = torch.nested.as_nested_tensor2(
                 tensor_list,
                 device=device,
                 dtype=dtype,
@@ -842,7 +843,7 @@ class TestNestedTensorSubclass(TestCase):
                 expected_dim,
                 expected_batch_size)
 
-            # Make sure grads flow back into original tensors for as_nested_tensor()
+            # Make sure grads flow back into original tensors for as_nested_tensor2()
             if components_require_grad:
                 (nt * 2).backward(torch.ones_like(nt))
                 for t in tensor_list:
@@ -856,7 +857,7 @@ class TestNestedTensorSubclass(TestCase):
     @onlyCUDA
     def test_jagged_layout_construction_with_pinned_memory(self, device):
         for tensor_list in self._get_example_tensor_lists():
-            nt = torch.nested.nested_tensor(
+            nt = torch.nested.nested_tensor2(
                 tensor_list,
                 layout=torch.jagged,
                 device="cpu",
@@ -974,14 +975,14 @@ class TestNestedTensorSubclass(TestCase):
         if dim < 2:
             # 0-1 dim tensors can't be converted to NTs
             with self.assertRaisesRegex(RuntimeError, "Expected tensor argument to have dim"):
-                nt = torch.nested.as_nested_tensor(t, device=device, dtype=dtype, layout=layout)
+                nt = torch.nested.as_nested_tensor2(t, device=device, dtype=dtype, layout=layout)
             return
 
         orig_t = t
         if not contiguous:
             t = t.transpose(0, 1)
 
-        nt = torch.nested.as_nested_tensor(t, device=device, dtype=dtype, layout=layout)
+        nt = torch.nested.as_nested_tensor2(t, device=device, dtype=dtype, layout=layout)
         expected_dim = t.dim()
         expected_batch_size = t.size(0)
         self._validate_nt(
@@ -992,20 +993,20 @@ class TestNestedTensorSubclass(TestCase):
         #     self.assertTrue(nt._is_view() and nt._base is t)
 
         # should be equivalent to construction from unbound tensor list
-        nt_from_unbind = torch.nested.as_nested_tensor(
+        nt_from_unbind = torch.nested.as_nested_tensor2(
             list(t.unbind(0)), device=device, dtype=dtype, layout=layout)
         self.assertEqual(nt, nt_from_unbind)
 
         # ensure call on a NT with the same properties returns the NT directly
         # TODO(rzou): It's OK, semantics changed
-        # nt2 = torch.nested.as_nested_tensor(nt, device=device, dtype=dtype, layout=layout)
+        # nt2 = torch.nested.as_nested_tensor2(nt, device=device, dtype=dtype, layout=layout)
         # self.assertTrue(nt is nt2)
 
         # we don't support conversion between layouts this way atm
         other_layout = torch.strided if layout == torch.jagged else torch.jagged
         with self.assertRaisesRegex(
                 RuntimeError, "Converting between nested tensor layouts is not supported"):
-            torch.nested.as_nested_tensor(nt, device=device, dtype=dtype, layout=other_layout)
+            torch.nested.as_nested_tensor2(nt, device=device, dtype=dtype, layout=other_layout)
 
         if requires_grad:
             # make sure gradients flow back into inputs
@@ -1018,7 +1019,7 @@ class TestNestedTensorSubclass(TestCase):
         for tensor_list in self._get_example_tensor_lists():
             orig_device = torch.device("cpu")
             orig_dtype = torch.float32
-            nt = torch.nested.nested_tensor(
+            nt = torch.nested.nested_tensor2(
                 tensor_list,
                 layout=torch.jagged,
                 device=orig_device,
@@ -1033,7 +1034,7 @@ class TestNestedTensorSubclass(TestCase):
 
     def test_unbind(self, device):
         for tensor_list in self._get_example_tensor_lists():
-            nt = torch.nested.nested_tensor(
+            nt = torch.nested.nested_tensor2(
                 tensor_list,
                 layout=torch.jagged,
                 device=device)
@@ -1050,7 +1051,7 @@ class TestNestedTensorSubclass(TestCase):
         bias = torch.randn(3, requires_grad=False, dtype=torch.float64, device=device)
 
         def grad_test_func(a, b, c, bias):
-            nt = torch.nested.as_nested_tensor([a, b, c], layout=torch.jagged)
+            nt = torch.nested.as_nested_tensor2([a, b, c], layout=torch.jagged)
             out = torch.nn.functional.layer_norm(nt, (nt.shape[-1],), bias=bias)
             return out.values()
 
@@ -1062,7 +1063,7 @@ class TestNestedTensorSubclass(TestCase):
             RuntimeError,
             r"layer_norm\(\): normalizing over ragged dim not supported for nested tensors",
         ):
-            nt = torch.nested.as_nested_tensor(test_tensor_list, layout=torch.jagged)
+            nt = torch.nested.as_nested_tensor2(test_tensor_list, layout=torch.jagged)
             _ = torch.nn.functional.layer_norm(nt, (nt.shape[-2], nt.shape[-1]))
 
     def test_narrow(self, device):
@@ -1096,7 +1097,7 @@ class TestNestedTensorSubclass(TestCase):
         a = torch.randn(2, 3, requires_grad=True, dtype=torch.float64, device=device)
         b = torch.randn(3, 3, requires_grad=True, dtype=torch.float64, device=device)
         c = torch.randn(4, 3, requires_grad=True, dtype=torch.float64, device=device)
-        nt_contiguous = torch.nested.as_nested_tensor([a, b, c], layout=torch.jagged)
+        nt_contiguous = torch.nested.as_nested_tensor2([a, b, c], layout=torch.jagged)
 
         starts_nc = torch.tensor([0, 1, 2, 3, 4], device=device, dtype=torch.int64)
         lengths_nc = torch.tensor([3, 2, 2, 1, 5], device=device, dtype=torch.int64)
@@ -1165,7 +1166,7 @@ class TestNestedTensorSubclass(TestCase):
         a = torch.randn(2, 3, 4, requires_grad=True, dtype=torch.float64, device=device)
         b = torch.randn(3, 3, 4, requires_grad=True, dtype=torch.float64, device=device)
         c = torch.randn(4, 3, 4, requires_grad=True, dtype=torch.float64, device=device)
-        nt = torch.nested.nested_tensor([a, b, c], layout=torch.jagged)
+        nt = torch.nested.nested_tensor2([a, b, c], layout=torch.jagged)
         # transpose ragged dim
         transposed = nt.transpose(1, 2)
         self.assertFalse(transposed.is_contiguous())
@@ -1189,7 +1190,7 @@ class TestNestedTensorSubclass(TestCase):
         check_nt_equality(detached, transposed)
 
     def test_to_copy(self, device):
-        nt = torch.nested.nested_tensor(
+        nt = torch.nested.nested_tensor2(
             [torch.randn(i + 2, 3, 4, requires_grad=True, dtype=torch.float64, device=device)
              for i in range(3)], layout=torch.jagged
         )
@@ -1244,11 +1245,11 @@ class TestNestedTensorSubclass(TestCase):
         def get_3_tensors():
             return [torch.randn(i + 2, 3, 4, requires_grad=True, dtype=torch.float64, device=device) for i in range(3)]
 
-        nt1, offsets1 = jagged_from_list(get_3_tensors(), None)
-        nt2, offsets1 = jagged_from_list(get_3_tensors(), offsets1)
+        nt1, offsets1 = jagged_from_list2(get_3_tensors(), None)
+        nt2, offsets1 = jagged_from_list2(get_3_tensors(), offsets1)
 
-        nt3, offsets2 = jagged_from_list(get_3_tensors(), None)
-        nt4, offsets2 = jagged_from_list(get_3_tensors(), offsets2)
+        nt3, offsets2 = jagged_from_list2(get_3_tensors(), None)
+        nt4, offsets2 = jagged_from_list2(get_3_tensors(), offsets2)
 
         def check_size(nt1, nt2, nt3, nt4):
             self.assertTrue(torch.ops.aten.is_same_size(nt1, nt2))
@@ -1285,7 +1286,7 @@ class TestNestedTensorSubclass(TestCase):
 
         # Simplest case: 1 sentence, no batching
         x_d1 = sen1.unsqueeze(0)
-        x_nt = torch.nested.as_nested_tensor([sen1], layout=torch.jagged)
+        x_nt = torch.nested.as_nested_tensor2([sen1], layout=torch.jagged)
 
         # See note below for why we detach here.
         q_d1 = query(x_d1).view(batch_size, -1, n_heads, head_dims).detach().requires_grad_(True)
@@ -1331,7 +1332,7 @@ class TestNestedTensorSubclass(TestCase):
 
         # Simple case: 2 sentences, no extra params
         x_d2 = sen2.unsqueeze(0)
-        x_nt = torch.nested.as_nested_tensor([sen1, sen2], layout=torch.jagged)
+        x_nt = torch.nested.as_nested_tensor2([sen1, sen2], layout=torch.jagged)
 
         # NB: we make sure the leaf tensor we compute gradients for is the view-ed tensor before
         # it is transposed. This is because today we cannot backward through view or unbind a
@@ -1405,7 +1406,7 @@ class TestNestedTensorSubclass(TestCase):
         # Simplest case: 1 sentence, no batching
         x_d1 = sen1.unsqueeze(0)
         x_d2 = sen2.unsqueeze(0)
-        x_nt = torch.nested.as_nested_tensor([sen1, sen2], layout=torch.jagged)
+        x_nt = torch.nested.as_nested_tensor2([sen1, sen2], layout=torch.jagged)
 
         q_d1 = query(x_d1).view(batch_size, -1, n_heads, head_dims).transpose(1, 2)
         k_d1 = key(x_d1).view(batch_size, -1, n_heads, head_dims).transpose(1, 2)

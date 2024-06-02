@@ -22,7 +22,8 @@ def as_nested_tensor(
     ts: Union[Tensor, List[Tensor], Tuple[Tensor, ...]],
     dtype: Optional[DType] = None,
     device: Optional[Device] = None,
-    layout=None
+    layout=None,
+    njt2=False,
 ) -> Tensor:
     r"""
     Constructs a nested tensor preserving autograd history from a tensor or a list / tuple of
@@ -113,6 +114,9 @@ def as_nested_tensor(
             offsets = torch.arange(0, batch_size * seq_len + 1, seq_len,
                                    device=device, dtype=torch.int64)
 
+            if njt2:
+                from torch.nested._internal.njt2 import NJT2
+                return NJT2(values, offsets)
             from torch.nested._internal.nested_tensor import nested_view_from_values_offsets
 
             return nested_view_from_values_offsets(values, offsets)
@@ -120,7 +124,7 @@ def as_nested_tensor(
             from torch.nested._internal.nested_tensor import jagged_from_list
 
             assert isinstance(ts, list)
-            nt, _ = jagged_from_list(ts, offsets=None, device=device, dtype=dtype)
+            nt, _ = jagged_from_list(ts, offsets=None, device=device, dtype=dtype, njt2=njt2)
             return nt
     else:
         raise RuntimeError(f"Specified layout is unsupported for nested tensors: {layout}")
@@ -184,7 +188,7 @@ Example::
 """,
 )
 
-def nested_tensor(tensor_list, *, dtype=None, layout=None, device=None, requires_grad=False, pin_memory=False) -> Tensor:
+def nested_tensor(tensor_list, *, dtype=None, layout=None, device=None, requires_grad=False, pin_memory=False, njt2=False) -> Tensor:
     r"""
 Constructs a nested tensor with no autograd history (also known as a "leaf tensor", see
 :ref:`Autograd mechanics <autograd-mechanics>`) from :attr:`tensor_list` a list of tensors.
@@ -229,7 +233,7 @@ Example::
         from torch.nested._internal.nested_tensor import jagged_from_list
 
         with torch.no_grad():
-            nt, _ = jagged_from_list(list_of_tensors, offsets=None, device=device, dtype=dtype)
+            nt, _ = jagged_from_list(list_of_tensors, offsets=None, device=device, dtype=dtype, njt2=njt2)
 
         nt.requires_grad_(requires_grad)
         if pin_memory:
@@ -238,6 +242,13 @@ Example::
         return nt
     else:
         raise RuntimeError(f"Specified layout is unsupported for nested tensors: {layout}")
+
+
+def as_nested_tensor2(*args, **kwargs):
+    return as_nested_tensor(*args, **kwargs, njt2=True)
+
+def nested_tensor2(*args, **kwargs):
+    return nested_tensor(*args, **kwargs, njt2=True)
 
 
 def narrow(tensor: Tensor, dim: int, start: Union[int, Tensor], length: Union[int, Tensor], layout=torch.strided) -> Tensor:
