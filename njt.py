@@ -78,9 +78,9 @@ class NJT:
     # Method-only are annoying
     def to(self, *args, **kwargs):
         if 'device' in kwargs:
-            return NJT(self._values.to(*args, **kwargs), self._offsets.to(kwargs["device"]))
+            return njt_like(self, self._values.to(*args, **kwargs), self._offsets.to(kwargs["device"]))
         else:
-            return NJT(self._values.to(*args, **kwargs), self._offsets)
+            return njt_like(self, self._values.to(*args, **kwargs))
 
     def __mul__(self, other):
         return torch.mul(self, other)
@@ -93,7 +93,7 @@ class NJT:
 
     @property
     def grad(self):
-        return NJT(self._values.grad, self._offsets)
+        return njt_like(self, self._values.grad)
 
     def backward(self, grad_output=None):
         if grad_output is not None and isinstance(grad_output, torch.Tensor):
@@ -227,6 +227,15 @@ def same_offsets(a, b):
     # TODO(rzou): try jeffrey's union find thing
     return a._offsets is b._offsets
 
+def njt_like(a, values=None, offsets=None, ragged_idx=None):
+    if values is None:
+        values = a._values
+    if offsets is None:
+        offsets = a._offsets
+    if ragged_idx is None:
+        ragged_idx = a._ragged_idx
+    return NJT(values, offsets, ragged_idx)
+
 # binary pointwise
 @register_njt([
     torch.add,
@@ -239,9 +248,9 @@ def _(func, input, other, *, out=None, **kwargs):
     if isinstance(other, torch.Tensor):
         if not same_offsets(input, other):
             raise RuntimeError("cannot call binary pointwise function .* with inputs of shapes")
-        return NJT(func(input._values, other._values, **kwargs), input._offsets)
+        return njt_like(input, func(input._values, other._values, **kwargs))
     else:
-        return NJT(func(input._values, other, **kwargs), input._offsets)
+        return njt_like(input, func(input._values, other, **kwargs))
 
 # unary pointwise
 @register_njt([
@@ -257,7 +266,7 @@ def _(func, input, other, *, out=None, **kwargs):
 ])
 def _(func, input, *, out=None, **kwargs):
     assert out is None
-    return NJT(func(input._values, **kwargs), input._offsets)
+    return njt_like(input, func(input._values, **kwargs))
 
 @register_njt([torch.unbind])
 def _(func, input, dim=0):
@@ -285,6 +294,8 @@ def _outer_to_inner_dim(ndim, dim):
     assert dim >= 0 and dim < ndim
     return 0 if dim < 2 else dim - 1
 
+from torch.nested._internal.ops import _wrap_jagged_dim
+
 @register_njt(torch.transpose)
 def transpose(func, input, dim0, dim1):
     from torch._prims_common import canonicalize_dims
@@ -309,17 +320,16 @@ def transpose(func, input, dim0, dim1):
             to_dim = dim1
         else:
             to_dim = dim0
-        return NJT(
-            inp.values().transpose(
+        return njt_like(
+            inp,
+            values=inp.values().transpose(
                 _outer_to_inner_dim(len(inp._size), dim0),
                 _outer_to_inner_dim(len(inp._size), dim1),
             ),
-            inp._offsets
-            ragged_idx=to_dim
+            ragged_idx=to_dim,
         )
 
-    new_kwargs["dim0"] = _wrap_jagged_dim(inp.dim(), new_kwargs["dim0"], "transpose")
-    new_kwargs["dim1"] = _wrap_jagged_dim(inp.dim(), new_kwargs["dim1"], "transpose")
+    dim0 = _wrap_jagged_dim(inp.dim(), dim0, "transpose")
+    dim1 = _wrap_jagged_dim(inp.dim(), dim1, "transpose")
 
-    return NestedTensor(func(inp._values, **new_kwargs), **extract_kwargs(inp))
-
+    return njt_like(inp, func(inp._values, dim0, dim1))
