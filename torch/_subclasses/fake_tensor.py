@@ -150,6 +150,8 @@ def unset_fake_temporarily():
 def is_fake(x):
     if isinstance(x, FakeTensor):
         return True
+    if isinstance(x, torch._subclasses.functional_tensor.FunctionalTensor):
+        return is_fake(x.elem)
     if is_traceable_wrapper_subclass(x):
         attrs, _ = type(x).__tensor_flatten__(x)
         flattened_tensors = [getattr(x, attr) for attr in attrs]
@@ -171,6 +173,8 @@ def is_fake(x):
 def maybe_get_fake_mode(t):
     if isinstance(t, FakeTensor):
         return t.fake_mode
+    if isinstance(t, torch._subclasses.functional_tensor.FunctionalTensor):
+        return maybe_get_fake_mode(t.elem)
     if is_traceable_wrapper_subclass(t):
         inner_tensor_names, _ = t.__tensor_flatten__()
         modes = [
@@ -303,6 +307,28 @@ class FakeTensorConverter:
         maybe_memo = self._get_memo(t)
         if maybe_memo is not None:
             return maybe_memo
+
+        if isinstance(t, torch._subclasses.functional_tensor.FunctionalTensor):
+            t_func = t.elem
+            assert torch._is_functional_tensor(t_func)
+            reapply_views = torch._C._functionalization_reapply_views_tls()
+            unwrapped = torch._C._functorch._unwrap_functional_tensor(t_func, reapply_views)
+
+            out = self.from_real_tensor(
+                fake_mode,
+                unwrapped,
+                make_constant=make_constant,
+                shape_env=shape_env,
+                source=source,
+                symbolic_context=symbolic_context,
+                trace=trace,
+            )
+            out = torch._subclasses.functional_tensor.FunctionalTensor(
+                torch._to_functional_tensor(out)
+            )
+            torch._copy_functional_tensor_frozen(t.elem, out.elem)
+            return out
+
         existing_device = t.device
         # not yet supported in metatensors
         if t.is_quantized:
@@ -407,6 +433,7 @@ class FakeTensorConverter:
                     hint=value,
                     source=item_source,
                 )
+
         if make_constant:
             self.add_constant_storage_mapping(out)
         # NB: meta_converter set the memo

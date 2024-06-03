@@ -4930,7 +4930,6 @@ def forward(self, primals_1, primals_2):
         opt_ladder = torch.compile(ladder, fullgraph=True, backend="eager")
         self.assertEqual(opt_ladder(data), ladder(data))
 
-    @unittest.expectedFailure
     def test_trace_functional_tensor_with_error(self):
         from torch._subclasses.fake_tensor import FakeTensorMode
         from torch._subclasses.functional_tensor import (
@@ -4946,13 +4945,15 @@ def forward(self, primals_1, primals_2):
             return a + tmp
 
         fake_mode = FakeTensorMode()
-        with FunctionalTensorMode():
-            inp = torch.ones(3, 3, requires_grad=True)
-            inp = fake_mode.from_tensor(inp, static_shapes=True)
-            inp = FunctionalTensor.to_functional(inp)
 
-            tmp = torch.ones(3, 3, requires_grad=True)
-            tmp = fake_mode.from_tensor(tmp, static_shapes=True)
+        inp = torch.ones(3, 3, requires_grad=True)
+        inp = fake_mode.from_tensor(inp, static_shapes=True)
+
+        tmp = torch.ones(3, 3, requires_grad=True)
+        tmp = fake_mode.from_tensor(tmp, static_shapes=True)
+
+        with FunctionalTensorMode():
+            inp = FunctionalTensor.to_functional(inp)
             tmp = FunctionalTensor.to_functional(tmp)
 
             opt_f = torch.compile(f, backend="eager")

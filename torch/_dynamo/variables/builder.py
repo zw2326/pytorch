@@ -31,6 +31,7 @@ from torch._higher_order_ops.torchbind import call_torchbind
 from torch._ops import HigherOrderOperator
 from torch._streambase import _EventBase, _StreamBase
 from torch._subclasses.fake_tensor import FakeTensor, is_fake, maybe_get_fake_mode
+from torch._subclasses.functional_tensor import FunctionalTensor
 from torch._subclasses.meta_utils import is_sparse_any
 from torch.fx.experimental._backward_state import BackwardState
 from torch.fx.experimental.symbolic_shapes import (
@@ -1772,13 +1773,11 @@ def wrap_fx_proxy_cls(
 
     assert "example_value" not in proxy.node.meta, f"{proxy.node.meta['example_value']}"
 
-    initial_example_value = example_value
-
     def _clone_input(value):
         if isinstance(value, torch.Tensor):
             # tensor subclasses will not be converted to FakeTensors and need to be cloned
             if not (
-                isinstance(value, FakeTensor)
+                isinstance(value, (FakeTensor, FunctionalTensor))
                 or (
                     # Is functional tensor fakeified by this instance of Dynamo
                     torch._is_functional_tensor(value)

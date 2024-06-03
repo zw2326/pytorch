@@ -1913,7 +1913,7 @@ def run_node(tracer, node, args, kwargs, nnmodule):
                 assert "example_value" in node.meta
                 return node.meta["example_value"]
 
-        except (NotImplementedError, UnsupportedFakeTensorException) as e:
+        except (RuntimeError, UnsupportedFakeTensorException) as e:
             # NB: mimic how wrap_fake_exception does it
             from .exc import unimplemented
 

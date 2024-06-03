@@ -198,7 +198,7 @@ def _pop_mode_temporarily(k: Optional[DispatchKey] = None):
 
 
 @contextlib.contextmanager
-def _disable_current_modes():
+def _disable_current_modes(preserve_functional_modes=False):
     from torch._ops import (
         _len_torch_dispatch_stack_pre_dispatch,
         _pop_mode_from_pre_dispatch,
@@ -212,6 +212,7 @@ def _disable_current_modes():
         _pop_mode_from_pre_dispatch() for _ in range(mode_len_pre_dispatch)
     ]
 
+    functional_modes = []
     has_proxy_mode_in_pre_dispatch = False
     has_functional_mode_in_pre_dispatch = False
     has_schema_check_mode_in_pre_dispatch = False
@@ -221,6 +222,8 @@ def _disable_current_modes():
             has_proxy_mode_in_pre_dispatch = True
         if isinstance(i, FunctionalTensorMode):
             has_functional_mode_in_pre_dispatch = True
+            if preserve_functional_modes:
+                functional_modes.append(i)
         if isinstance(i, SchemaCheckMode):
             has_schema_check_mode_in_pre_dispatch = True
 
@@ -230,11 +233,13 @@ def _disable_current_modes():
     for old in old_modes:
         if (
             isinstance(old, FunctionalTensorMode)
-            and has_functional_mode_in_pre_dispatch
         ):
-            raise AssertionError(
-                "Can't have FunctionalMode available both in PreDispatch and Python Key"
-            )
+            if preserve_functional_modes:
+                functional_modes.append(old)
+            if has_functional_mode_in_pre_dispatch:
+                raise AssertionError(
+                    "Can't have FunctionalMode available both in PreDispatch and Python Key"
+                )
         if isinstance(old, ProxyTorchDispatchMode) and has_proxy_mode_in_pre_dispatch:
             raise AssertionError(
                 "Can't have ProxyTorchDispatchMode available both in PreDispatch and Python Key"
@@ -249,8 +254,12 @@ def _disable_current_modes():
 
     # Manually disable proxy and fake modes, if any are active
     try:
+        for mode in reversed(functional_modes):
+            _push_mode(mode)
         yield old_pre_dispatch_modes + old_modes
     finally:
+        for i in range(len(functional_modes)):
+            _pop_mode()
         for mode in reversed(old_modes):
             _push_mode(mode)
         for mode in reversed(old_pre_dispatch_modes):
