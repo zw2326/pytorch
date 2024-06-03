@@ -10,8 +10,6 @@ import sys
 sys.setrecursionlimit(5000)  # by default it is 1000
 
 HIGH_KERNEL_VOLUMN = 36864
-import sys
-sys.setrecursionlimit(5000)  # set the recursion limit to 5000
 
 def temporary_log_path(temp_log_path):
     # Store original configuration
@@ -39,7 +37,8 @@ class SSNode:
         node_id: the index of the node in the graph
         successors: {buf_name: SSNode}. It records the successors of the node. The buf_name is the name of the original node(scheduler node or fused node).
         predecessors: {buf_name: SSNode}. It records the predecessors of the node. The buf_name is the name of the original node(scheduler node or fused node).
-        fake_successors, fake_predecessors: {buf_name: SSNode}. It is used to set a node's fake successors when reordering.
+        first_predecessor: SSNode. A node should have same stream id with its first predecessor.
+        fake_successors, fake_predecessors: {buf_name: SSNode}. 
         name: the name of the original node.
         original_user_names: the names of the original users of the node. If the original node is a fused node, we'll check the users of scheduler nodes included in this fused node.
         stream_id: the stream id of the node. -1 means not assigned.
@@ -49,12 +48,16 @@ class SSNode:
         is_nop_node: mark if this node is a nop node.
         node_type: the type of the node. It can be "template", "extern", "foreach", "fused_or_schedule", "nop"
         kernel_volumn: the product of the node's arguments' size. It usually represents the number of kernel threads.
+        device: by default is None. If it is a cpu node, we will skip it.
+        skip_cpu_nodes: It is meaningless to add some stream switch for cpu nodes.
     """
 
-    def __init__(self, original_node) -> None:
+    def __init__(self, original_node, skip_cpu_nodes=True) -> None:
         from .scheduler import NopKernelSchedulerNode
         self.successors = {}
         self.predecessors = {}
+        self.first_successor = None
+        self.first_predecessor = None
         self.fake_successors = {}
         self.fake_predecessors = {}
         self.name = original_node.get_name() if original_node else ""
@@ -69,6 +72,17 @@ class SSNode:
         self.is_nop_node = isinstance(original_node, NopKernelSchedulerNode)
         self.node_type = None
         self.kernel_volumn = 0
+        self.device = None
+        self.skip_cpu_nodes = skip_cpu_nodes
+        # is it enough to check if the node is a cpu node?
+        if self.skip_cpu_nodes and original_node:
+            if hasattr(original_node, "group"):
+                for device in original_node.group:
+                    if isinstance(device, torch.device) and device.type != 'cpu':
+                        self.device = device.type
+                        break
+                else:
+                    self.device = 'cpu'
         if self.name and original_node.read_writes.var_ranges:
             results = 1
             for key, value in original_node.read_writes.var_ranges.items():
@@ -334,10 +348,12 @@ class SSGraph:
         self.arg_to_stream = {}
         self.final_order = []
         self.max_stream_id = 0
+        self.skip_cpu_nodes = True
         self.build_graph(nodes)
 
+
     def build_graph(self, nodes):
-        output_node = SSNode(None)
+        output_node = SSNode(None, skip_cpu_nodes=self.skip_cpu_nodes)
         output_node.name = "OUTPUT"
         self.name_mapping["OUTPUT"] = output_node
         for node in nodes:
@@ -441,6 +457,15 @@ class SSGraph:
             if cur_node in self.critical_path:
                 cur_node.stream_id = 0
             # if the node has only one predecessor and the predecessor has only one successor, then we can assign the same stream_id to the node
+            elif self.skip_cpu_nodes and cur_node.device == 'cpu':
+                if len(cur_node.predecessors) == 0:
+                    cur_node.stream_id = 0
+                else:
+                    if len(cur_node.predecessors) > 0:
+                        tmp_predecessor = list(cur_node.predecessors.values())[0]
+                    else:
+                        tmp_predecessor = None
+                    cur_node.stream_id = self.stream_pool_pop(tmp_predecessor)
             elif len(cur_node.predecessors) == 1:
                 predecessor = list(cur_node.predecessors.values())[0]
                 if len(predecessor.successors) == 1:
@@ -461,6 +486,7 @@ class SSGraph:
             else:
                 # fix nop node bug in super_slomo. there are corrosing references between two nop nodes.
                 nop_node_count = 0
+                # @TODO Yueming: this is a hacky way to fix the nop node bug in super_slomo. Need to double check.
                 # for successors in cur_node.successors.values():
                 #     if successors.is_nop_node:
                 #         nop_node_count += 1
@@ -766,4 +792,3 @@ def stream_schedule(snodes):
         ssgraph.print_graph()
     V.graph.stream_graph = ssgraph
     return ssgraph
-
