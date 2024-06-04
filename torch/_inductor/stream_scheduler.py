@@ -83,6 +83,8 @@ class SSNode:
                         break
                 else:
                     self.device = 'cpu'
+            elif hasattr(original_node, "get_device"):
+                self.device = original_node.get_device().type
         if self.name and original_node.read_writes.var_ranges:
             results = 1
             for key, value in original_node.read_writes.var_ranges.items():

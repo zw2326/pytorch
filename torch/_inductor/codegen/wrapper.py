@@ -585,10 +585,8 @@ class WrapperCodeGen(CodeGen):
             import triton
             import triton.language as tl
             from {} import grid, split_scan_grid, start_graph, end_graph
-            {}
             """.format(
                 triton_heuristics.__name__,
-                V.graph.device_ops.import_get_raw_stream_as("get_raw_stream"),
             )
         )
 
@@ -663,7 +661,7 @@ class WrapperCodeGen(CodeGen):
     # @Yueming TODO: fix it for user defined triton kernel
     def write_get_raw_stream(self, device_idx: int, graph=None) -> str:
         self.write_triton_header_once()
-        self.generate_stream_creation()
+        # self.generate_stream_creation()
         name = f"stream{device_idx}"
         # self.writeline(f"{name} = get_raw_stream({device_idx})")
         return name
@@ -922,6 +920,7 @@ class WrapperCodeGen(CodeGen):
                         self.header.writeline(f"stream{index} = stream{index}_raw.cuda_stream")
                 self.header.writeline(f"stream0_raw = torch.cuda.default_stream()")
             # TODO(Yueming): what about mutliple GPUs? is it always 0? is it better to change it to stream0_raw.cuda_stream?
+            self.header.writeline("{}".format(V.graph.device_ops.import_get_raw_stream_as("get_raw_stream")))
             self.header.writeline(f"stream0 = get_raw_stream(0)")
 
     def generate_stream_creation_in_body(self):
@@ -946,6 +945,7 @@ class WrapperCodeGen(CodeGen):
         if config.profile_bandwidth:
             self.write_triton_header_once()
         result = IndentedBuffer()
+        self.generate_stream_creation()
         result.splice(self.header)
         # We do not want the cpp header for intermediate const graph. Headers would be
         # rendered by the main module instead.
