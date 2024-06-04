@@ -5117,9 +5117,9 @@ class DeviceCopy(ExternKernelOut):
         args = self.codegen_args()
         assert len(args) == 1
         if self.output_view:
-            wrapper.codegen_device_copy(args[0], self.output_view.codegen_reference())
+            wrapper.codegen_device_copy(args[0], self.output_view.codegen_reference(), name=self.get_name())
         else:
-            wrapper.codegen_device_copy(args[0], self.codegen_reference())
+            wrapper.codegen_device_copy(args[0], self.codegen_reference(), name=self.get_name())
 
 
 class DynamicScalar(ExternKernel):

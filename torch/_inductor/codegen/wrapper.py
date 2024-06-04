@@ -919,9 +919,10 @@ class WrapperCodeGen(CodeGen):
                         self.header.writeline(f"stream{index}_raw = torch.cuda.Stream()")
                         self.header.writeline(f"stream{index} = stream{index}_raw.cuda_stream")
                 self.header.writeline(f"stream0_raw = torch.cuda.default_stream()")
-            # TODO(Yueming): what about mutliple GPUs? is it always 0? is it better to change it to stream0_raw.cuda_stream?
-            self.header.writeline("{}".format(V.graph.device_ops.import_get_raw_stream_as("get_raw_stream")))
-            self.header.writeline(f"stream0 = get_raw_stream(0)")
+            if V.graph.device_ops:
+                # TODO(Yueming): what about mutliple GPUs? is it always 0? is it better to change it to stream0_raw.cuda_stream?
+                self.header.writeline("{}".format(V.graph.device_ops.import_get_raw_stream_as("get_raw_stream")))
+                self.header.writeline(f"stream0 = get_raw_stream(0)")
 
     def generate_stream_creation_in_body(self):
         if V.graph.cpp_wrapper and config.multiple_streams:
@@ -1168,14 +1169,15 @@ class WrapperCodeGen(CodeGen):
         offset = self.codegen_sizevar(offset)
         return f"reinterpret_tensor({data.get_name()}, {size}, {stride}, {offset})"
 
-    def codegen_device_copy(self, src, dst):
-        self.writeline(f"{dst}.copy_({src})")
+    def codegen_device_copy(self, src, dst, name=None):
+        if config.multiple_streams:
+            self.generate_extern_kernel_w_stream(name, f"{dst}.copy_({src})")
+        else:
+            self.writeline(f"{dst}.copy_({src})")
 
     def codegen_multi_output(self, name, value):
         if config.multiple_streams:
-            call_strs = []
-            call_strs.append(f"{self.declare}{name} = {value}{self.ending}")
-            self.generate_extern_kernel_w_stream(name, call_strs)
+            self.generate_extern_kernel_w_stream(name, f"{self.declare}{name} = {value}{self.ending}")
         else:
             self.writeline(f"{self.declare}{name} = {value}{self.ending}")
 
