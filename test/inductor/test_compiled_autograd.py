@@ -1,5 +1,6 @@
 # Owner(s): ["module: inductor"]
 import functools
+import io
 import logging
 import re
 import sys
@@ -13,6 +14,7 @@ import torch.nn as nn
 from torch import _inductor as inductor
 from torch._dynamo import compiled_autograd, config
 from torch._dynamo.utils import counters
+from torch._inductor import config as inductor_config
 from torch._inductor.test_case import run_tests, TestCase
 from torch.testing._internal.inductor_utils import HAS_CPU, HAS_CUDA
 from torch.testing._internal.logging_utils import logs_to_string
@@ -457,7 +459,7 @@ main()
         param_proxy, activ_proxy = proxies
         buf = activ_proxy * 2
         torch.ops.inductor.accumulate_grad_.default(param_proxy, buf)
-        compiled_fn = compiler.end_capture(buf)
+        runtime_wrapper, compiled_fn = compiler.end_capture(buf)
 
         def bytecode_hook(code, out_code):
             import dis
@@ -494,7 +496,9 @@ main()
         torch._dynamo.reset()
         handle = torch._dynamo.convert_frame.register_bytecode_hook(bytecode_hook)
         try:
-            compiled_fn(inputs=[param, activ], sizes=(), hooks=())
+            runtime_wrapper(
+                compiled_fn=compiled_fn, inputs=[param, activ], sizes=(), hooks=()
+            )
         finally:
             handle.remove()
 
@@ -1657,6 +1661,58 @@ TORCH_LIBRARY(test_autograd_cpp_node_data_dependent, m) {
 
             out = compiled_fn(activations)
             self.assertTrue(len(activations) == 0)
+
+    @unittest.skipIf(not HAS_CUDA, "requires cuda")
+    def test_cudagraphs_cpu_division(self):
+        from torch._dynamo.testing import reduce_to_scalar_loss
+
+        model = torch.nn.Linear(10, 10, dtype=torch.float16).cuda()
+        inputs = torch.randn(10, 10, dtype=torch.float16).cuda()
+        out = model(inputs)
+        loss = reduce_to_scalar_loss(out)
+
+        stderr_msgs = io.StringIO()
+        with mock.patch("sys.stderr", stderr_msgs), compiled_autograd.enable(
+            compiler_fn
+        ):
+            torch._inductor.config.triton.cudagraphs = True
+            loss.backward()
+            torch._inductor.config.triton.cudagraphs = False
+
+        self.assertFalse("skipping cudagraphs" in stderr_msgs.getvalue())
+
+    def test_cudagraphs_cpu_graph(self):
+        from torch._dynamo.testing import reduce_to_scalar_loss
+
+        model = torch.nn.Linear(10, 10, dtype=torch.float16)
+        inputs = torch.randn(10, 10, dtype=torch.float16)
+        out = model(inputs)
+        loss = reduce_to_scalar_loss(out)
+
+        with compiled_autograd.enable(compiler_fn):
+            torch._inductor.config.triton.cudagraphs = True
+            loss.backward()
+            torch._inductor.config.triton.cudagraphs = False
+
+        self.assertEqual(counters["inductor"]["cudagraph_skips"], 1)
+
+    @unittest.skipIf(not HAS_CUDA, "requires cuda")
+    def test_cudagraphs_sdpa(self):
+        query = torch.rand(
+            32, 8, 128, 64, dtype=torch.float16, device="cuda", requires_grad=True
+        )
+        key = torch.rand(32, 8, 128, 64, dtype=torch.float16, device="cuda")
+        value = torch.rand(32, 8, 128, 64, dtype=torch.float16, device="cuda")
+        out = torch.nn.functional.scaled_dot_product_attention(query, key, value)
+
+        with config.patch(compiled_autograd=True), inductor_config.patch(
+            "triton.cudagraphs", True
+        ):
+            opt_bwd = torch.compile(lambda: out.sum().backward())
+            opt_bwd()
+
+        self.assertEqual(counters["compiled_autograd"]["captures"], 1)
+        self.assertEqual(counters["inductor"]["cudagraph_skips"], 0)
 
     def test_verbose_logs_graph(self):
         torch._logging.set_logs(compiled_autograd_verbose=True)
