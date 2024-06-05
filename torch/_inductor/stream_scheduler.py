@@ -520,6 +520,16 @@ class SSGraph:
         # The stream 0 is reserved when do the stream pool pop
         self.stream_pool[0] = len(self.ssnodes) + 2
         self.dig_node(self.ssnodes[0])
+        def check_all_nodes_assigned():
+            for ssnode in self.ssnodes:
+                if ssnode.stream_id == -1:
+                    log.info(f"Hanging node {ssnode.get_name()} found when doing stream assignment.")
+                    self.dig_node(ssnode)
+                    return False
+            return True
+        while (not check_all_nodes_assigned()):
+            pass
+
 
     def dfs_search(self, cur_node: SSNode):
         # sort the predecessors by their stream_id and sort from large to small

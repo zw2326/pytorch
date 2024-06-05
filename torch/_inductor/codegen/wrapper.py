@@ -744,6 +744,12 @@ class WrapperCodeGen(CodeGen):
             kernel_IndentedBuffer.writeline(f"event_{ssnode.get_name()}.record(stream{ssnode.stream_id}_raw)")
 
     def generate_extern_kernel_w_stream(self, node_name, call_strs, out_node=False):
+        """
+        Attributes:
+            node_name: name of the caller buffer
+            call_strs: list of strings or a single string to write
+            out_node: for cpp wrapper, we need to define a new buffer before using it.
+        """
         kernel_IndentedBuffer = IndentedBuffer()
         self.cuda_event_dependency(node_name, kernel_IndentedBuffer)
         ssnode = V.graph.stream_graph.name_mapping[node_name]
