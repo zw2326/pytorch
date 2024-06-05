@@ -90,7 +90,7 @@ def do_bench_gpu(
         return properties.l2CacheSize
 
     if fast_flush:
-        cache = torch.empty(int(256e6 // 4), dtype=torch.int, device="cuda")
+        cache = torch.empty(int(get_cache_size() // 4), dtype=torch.int, device="cuda")
     else:
         cache = torch.empty(int(256e6), dtype=torch.int8, device="cuda")
 
@@ -103,17 +103,14 @@ def do_bench_gpu(
         for _ in range(estimation_iters)
     ]
     for start_event, end_event in event_pairs:
-        start_event.record()
         cache.zero_()
+        start_event.record()
         fn()
         end_event.record()
     torch.cuda.synchronize()
     estimate_ms = min(
         [event_pair[0].elapsed_time(event_pair[1]) for event_pair in event_pairs]
     )
-
-    if fast_flush:
-        cache = torch.empty(int(get_cache_size() // 4), dtype=torch.int, device="cuda")
 
     warmup_iters = max(1, int(warmup / estimate_ms))
     repeat_iters = max(1, int(rep / estimate_ms))
