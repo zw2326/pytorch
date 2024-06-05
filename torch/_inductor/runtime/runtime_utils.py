@@ -81,7 +81,7 @@ def do_bench(fn, fn_args, fn_kwargs, **kwargs):
 
 
 def do_bench_gpu(
-    fn, warmup=25, rep=100, fast_flush=True, quantiles=(0.5,), return_mode="mean"
+    fn, warmup=25, rep=100, fast_flush=True, quantiles=(0.1,), return_mode="mean"
 ):
     @functools.lru_cache(None)
     def get_cache_size():
@@ -112,8 +112,8 @@ def do_bench_gpu(
         [event_pair[0].elapsed_time(event_pair[1]) for event_pair in event_pairs]
     )
 
-    warmup_iters = max(1, int(warmup / estimate_ms))
-    repeat_iters = max(1, int(rep / estimate_ms))
+    warmup_iters = min(50, max(1, int(warmup / estimate_ms)))
+    repeat_iters = min(30, max(1, int(rep / estimate_ms)))
 
     event_pairs = [
         (
