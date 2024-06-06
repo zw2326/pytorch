@@ -18,6 +18,7 @@
 #include <ATen/functorch/PlumbingHelper.h>
 #include <ATen/functorch/TensorWrapper.h>
 #include <c10/core/AutogradState.h>
+#include <torch/extension.h>
 
 #include <iostream>
 
@@ -596,6 +597,34 @@ void initFuncTorchBindings(PyObject* module) {
       .def(
           "functionalizeAddBackViews",
           &FunctionalizeInterpreterPtr::functionalizeAddBackViews);
+}
+
+Tensor Fake_new(const Tensor& base, IntArrayRef sizes, IntArrayRef strides) {
+  auto keyset = base.unsafeGetTensorImpl()->key_set();
+  auto result = at::detail::make_tensor<TensorImpl>(keyset, base.dtype(), base.device());
+  result.unsafeGetTensorImpl()->set_sizes_and_strides(sizes, strides);
+  return result;
+}
+Tensor Fake_t(const Tensor& x) {
+  return Fake_new(x, {x.sizes()[1], x.sizes()[0]}, x.strides());
+}
+Tensor Fake_detach(const Tensor& x) {
+  return Fake_new(x, x.sizes(), x.strides());
+}
+Tensor Fake_relu(const Tensor& x) {
+  return Fake_new(x, x.sizes(), x.strides());
+}
+Tensor Fake_addmm(const Tensor& self, const Tensor& mat1, const Tensor& mat2, const Scalar& beta, const Scalar& alpha) {
+  int64_t a = mat1.sizes()[0];
+  int64_t b = mat2.sizes()[1];
+  return Fake_new(self, {a, b}, {a * b, 1});
+}
+
+TORCH_LIBRARY_IMPL(aten, Fake, m) {
+  m.impl("t", &Fake_t);
+  m.impl("addmm", &Fake_addmm);
+  m.impl("relu", &Fake_relu);
+  m.impl("detach", &Fake_detach);
 }
 
 } // namespace torch::functorch::impl
