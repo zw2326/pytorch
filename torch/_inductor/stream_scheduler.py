@@ -329,7 +329,7 @@ class SSGraph:
         ssnodes: [SSNode]. It records all the SSNodes in the graph. The order matters.
         name_mapping: {buf name: SSNode}. It records the mapping from the original node name to the SSNode. The names include scheduler node name and fused node. For example, buf4, buf5, and buf4_buf5 are all pointed to the same SSNode.
         reverse_level: {SSNode: level}. It records the levels back from the OUTPUT node. The level of OUTPUT node is 0. The level of the predecessors of OUTPUT node is 1. The level of the predecessors of the predecessors of OUTPUT node is 2. And so on.
-        reverse_level_predecessors: {level: [SSNode]}. It records the predecessors of each level.
+        reverse_level_predecessors: {SSNode:reverse_predecessor_node, }. It records a node's predecessor in reverse order.
         critical_path: [SSNode]. It records the critical path of the graph. All nodes in the critical path will be assigned to the default stream.
         stream_pool_size: how many extra CUDA streams used to allocate. TODO: it's better to use the max number of nodes in the same level in reverse_level
         stream_pool: [stream_index, ]. It records the CUDA streams used to allocate.
@@ -365,6 +365,10 @@ class SSGraph:
             if new_ssnode.is_fused:
                 for snode in new_ssnode.snode_names:
                     self.name_mapping[snode] = new_ssnode
+            # huggingface/YituTechConvBert try to get buf1144 which is part of a fused node but not in new_ssnode.snode_names
+            possible_names = node.get_name().split("_")
+            for name in possible_names:
+                self.name_mapping[name] = new_ssnode
 
         # clean the freed buffers
         for snode in self.ssnodes:
@@ -391,6 +395,10 @@ class SSGraph:
             # only append the node that has only one successor OUTPUT
             if len(predecessor.successors) == 1:
                 tmp_queue.append(predecessor)
+        if len(tmp_queue) == 0:
+            log.warning("This graph has no nodes whose single successor is the OUTPUT node.")
+            for predecessor in output_node.predecessors.values():
+                tmp_queue.append(predecessor)
         finished = set()
         finished.add(output_node)
         # TODO(Yueming): what's the theorectical maximum iteration? (n-1)^n?
@@ -404,10 +412,22 @@ class SSGraph:
                     if successor not in tmp_queue:
                         if len(cur_node.successors) == 1 and successor not in tmp_queue:
                             tmp_queue.append(successor)
+                        # a workaround to fix hanging nodes
+                        if len(successor.successors.values()) == 0 and successor not in tmp_queue and successor != output_node:
+                            tmp_queue.append(successor)
                         # Yueming TODO: This can be delayed.
                         tmp_queue.append(cur_node)
                     break
             else:
+                # a workaround to fix hanging nodes
+                if len(cur_node.successors) == 0:
+                    self.reverse_level[cur_node] = 0
+                    self.reverse_level_predecessors[cur_node] = None
+                    for predecessor in cur_node.predecessors.values():
+                        if predecessor not in finished and predecessor not in tmp_queue:
+                            tmp_queue.append(predecessor)
+                    finished.add(cur_node)
+                    continue
                 first_successor = list(cur_node.successors.values())[0]
                 max_value = self.reverse_level[first_successor]
                 self.reverse_level[cur_node] = max_value + 1
@@ -422,6 +442,8 @@ class SSGraph:
                     if predecessor not in finished and predecessor not in tmp_queue:
                         tmp_queue.append(predecessor)
                 finished.add(cur_node)
+        else:
+            log.warning("This warning is not supposed to happen. The graph may be too densely connected.")
         if len(tmp_queue) != 0:
             raise RuntimeError("Error when processing the queue. The queue is not empty after the loop.")
 
