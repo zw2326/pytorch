@@ -73,6 +73,9 @@ class NJT2:
     def _size(self):
         return self.shape
 
+    def detach(self):
+        return torch.ops.aten.detach(self)
+
     @property
     def requires_grad(self):
         return self._values.requires_grad
@@ -245,6 +248,7 @@ def _(func, inputs, chunks, dim=0):
     torch.nn.functional.relu,
     torch.nn.functional.silu,
     torch.ops.aten._to_copy,
+    torch.ops.aten.detach,
 ])
 def _(func, input, *, out=None, **kwargs):
     assert out is None
