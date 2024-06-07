@@ -20,6 +20,7 @@ log = logging.getLogger(__name__)
 
 
 def _validate_sdpa_input(
+    njt_class,
     query: torch.Tensor,
     key: torch.Tensor,
     value: torch.Tensor,
@@ -29,9 +30,9 @@ def _validate_sdpa_input(
     scale=None,
 ):
     if (
-        not isinstance(query, NestedTensor)
-        or not isinstance(key, NestedTensor)
-        or not isinstance(value, NestedTensor)
+        not isinstance(query, njt_class)
+        or not isinstance(key, njt_class)
+        or not isinstance(value, njt_class)
     ):
         raise ValueError(
             f"Expected query, key, and value to be nested tensors, "
@@ -110,9 +111,10 @@ def _check_head_dim_size_flash_nested(params: SDPAParams, debug=False) -> bool:
 
 
 def _check_for_seq_len_0_and_consistent_head_dim_nested_helper(
+    njt_class,
     param: torch.Tensor, param_name: str, debug=False
 ) -> bool:
-    assert isinstance(param, NestedTensor), "param should be a jagged NT"
+    assert isinstance(param, njt_class), "param should be a jagged NT"
 
     if param._ragged_idx == 1:
         # num_head_dims is ragged
@@ -308,7 +310,7 @@ def _cumulative_and_max_seq_len_nnz(qkv: torch.Tensor) -> Tuple[torch.Tensor, in
 
     # It returns a tuple of cumulative sequence lengths and the maximum sequence
     # length, and the last element in the cumulative_sequence_lengths
-    if not isinstance(qkv, NestedTensor):
+    if not isinstance(qkv, njt_class):
         raise ValueError("QKV must be nested for flash cumulative_seq_len calculation.")
 
     if qkv.lengths() is None:
@@ -328,7 +330,7 @@ def _cumulative_and_max_seq_len_nnz(qkv: torch.Tensor) -> Tuple[torch.Tensor, in
     return cumulative_seqlen, max_seqlen, n_elem
 
 
-def _is_safe_to_get_storage_as_tensor(tensor: torch.Tensor):
+def _is_safe_to_get_storage_as_tensor(njt_class, tensor: torch.Tensor):
     # This function checks if a nested tensor is valid for
     # use with the flash-attention and efficient_attention kernels without
     # needing to call contiguous on the nested tensor input.
@@ -338,7 +340,7 @@ def _is_safe_to_get_storage_as_tensor(tensor: torch.Tensor):
     # the nested tensor resulting in a Nt of shape [bsz, {seq_len}, num_heads, dim]
 
     # Returns a boolean indicating if contiguous needs to be called for input
-    assert isinstance(tensor, NestedTensor)
+    assert isinstance(tensor, njt_class)
     offsets = tensor.offsets()
     strides = tensor._strides
 
@@ -509,7 +511,7 @@ def _view_as_dense(
 #     )
 
 
-def _sdpa_nested_preprocessing(query, key, value):
+def _sdpa_nested_preprocessing(njt_class, query, key, value):
     # Query (Batch x Num_heads x {Q_seq_len}  x Dim_per_head)
     # Key   (Batch x Num_heads x {KV_seq_len} x Dim_per_head)
     # Value (Batch x Num_heads x {KV_seq_len} x Dim_per_head)
@@ -553,11 +555,11 @@ def _sdpa_nested_preprocessing(query, key, value):
     # If the physical layout of the NestedTensor's storage
     # is not: batch, {seq_len}, num_heads, head_dim then we need
     # to call contiguous
-    if not q_t.is_contiguous() and not _is_safe_to_get_storage_as_tensor(q_t):
+    if not q_t.is_contiguous() and not _is_safe_to_get_storage_as_tensor(njt_class, q_t):
         q_t = q_t.contiguous()
-    if not k_t.is_contiguous() and not _is_safe_to_get_storage_as_tensor(k_t):
+    if not k_t.is_contiguous() and not _is_safe_to_get_storage_as_tensor(njt_class, k_t):
         k_t = k_t.contiguous()
-    if not v_t.is_contiguous() and not _is_safe_to_get_storage_as_tensor(v_t):
+    if not v_t.is_contiguous() and not _is_safe_to_get_storage_as_tensor(njt_class, v_t):
         v_t = v_t.contiguous()
 
     query_buffer_reshaped = _view_as_dense(q_t, Nnz_q, num_heads, head_dim_qk)
@@ -614,6 +616,7 @@ def _post_process_flash_output(out: torch.Tensor, og_size):
 
 
 def jagged_scaled_dot_product_attention(
+    njt_class,
     query: torch.Tensor,
     key: torch.Tensor,
     value: torch.Tensor,
@@ -622,12 +625,12 @@ def jagged_scaled_dot_product_attention(
     is_causal=False,
     scale=None,
 ):
-    _validate_sdpa_input(query, key, value, attn_mask, dropout_p, is_causal, scale)
+    _validate_sdpa_input(njt_class, query, key, value, attn_mask, dropout_p, is_causal, scale)
     # for mypy, ugh
     assert (
-        isinstance(query, NestedTensor)
-        and isinstance(key, NestedTensor)
-        and isinstance(value, NestedTensor)
+        isinstance(query, njt_class)
+        and isinstance(key, njt_class)
+        and isinstance(value, njt_class)
     )
 
     # Special path for non-ragged sequence length (e.g. for SAM where we have a ragged
@@ -641,14 +644,14 @@ def jagged_scaled_dot_product_attention(
             key._values,
             value._values,
             attn_mask=(
-                attn_mask._values if isinstance(attn_mask, NestedTensor) else attn_mask
+                attn_mask._values if isinstance(attn_mask, njt_class) else attn_mask
             ),
             dropout_p=dropout_p,
             is_causal=is_causal,
             scale=scale,
         )
 
-        return NestedTensor(output, **extract_kwargs(query))
+        return njt_class(output, **extract_kwargs(query))
 
     compute_logsumexp = query.requires_grad or key.requires_grad or value.requires_grad
 
@@ -672,7 +675,7 @@ def jagged_scaled_dot_product_attention(
             max_seqlen_batch_q,
             max_seqlen_batch_kv,
             output_nt_info,
-        ) = _sdpa_nested_preprocessing(query_padded, key_padded, value_padded)
+        ) = _sdpa_nested_preprocessing(njt_class, query_padded, key_padded, value_padded)
 
         (
             attention,

@@ -291,7 +291,7 @@ def jagged_torch_function(func, *args, **kwargs):
     # SDPA has special kernels that handle nested tensors.
     # Dispatch to the correct implementation here
     if func is torch._C._nn.scaled_dot_product_attention:
-        return jagged_scaled_dot_product_attention(*args, **kwargs)
+        return jagged_scaled_dot_product_attention(NestedTensor, *args, **kwargs)
 
     # Handle flatten() here because it's CompositeImplicit.
     if func.__name__ == "flatten":

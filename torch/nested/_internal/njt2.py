@@ -21,6 +21,9 @@ class NestedInt:
 NESTED_INT_CACHE = {}
 
 class NJT2:
+    def __repr__(self):
+        return f"NJT2(shape={self.shape})"
+
     def __init__(self, values, offsets, _ragged_idx=1, _metadata_cache=None):
         self._values = values
         self._offsets = offsets
@@ -62,7 +65,9 @@ class NJT2:
 
     @property
     def shape(self):
-        return (self._offsets.shape[0] - 1, self._nested_int, self._values.shape[1:])
+        sizes = [self._offsets.shape[0] - 1, *self._values.shape]
+        sizes[self._ragged_idx] = self._nested_int
+        return tuple(sizes)
 
     @property
     def _size(self):
@@ -76,8 +81,10 @@ class NJT2:
     def layout(self):
         return torch.jagged
 
-    def size(self):
-        return self.shape
+    def size(self, dim=None):
+        if dim is None:
+            return self.shape
+        return self.shape[dim]
 
     def dim(self):
         return self._values.dim() + 1
@@ -124,6 +131,12 @@ class NJT2:
         else:
             self._values.backward(grad_output)
 
+    def view(self, *size):
+        return torch.ops.aten.view(self, size)
+
+    def expand(self, *sizes):
+        return torch.ops.aten.expand(self, sizes)
+
 
 def same_raggedness(a, b):
     return a._offsets is b._offsets and a._ragged_idx == b._ragged_idx
@@ -148,6 +161,8 @@ bind_method([
     "abs",
     "transpose",
     "chunk",
+    "squeeze",
+    "unsqueeze",
 ])
 
 def register_njt2(func):
@@ -225,8 +240,11 @@ def _(func, inputs, chunks, dim=0):
     torch.ones_like,
     torch.zeros_like,
     torch.empty_like,
+    torch.randn_like,
+    torch.rand_like,
     torch.nn.functional.relu,
     torch.nn.functional.silu,
+    torch.ops.aten._to_copy,
 ])
 def _(func, input, *, out=None, **kwargs):
     assert out is None
@@ -257,3 +275,41 @@ def _(func, input, dim=0):
 @register_njt2(torch.transpose)
 def transpose(func, input, dim0, dim1):
     return ops.transpose_int(NJT2, func, input=input, dim0=dim0, dim1=dim1)
+
+@register_njt2(torch.squeeze)
+def _(func, input, dim=None):
+    return ops.squeeze_dim(NJT2, func, input=input, dim=dim)
+
+@register_njt2(torch.unsqueeze)
+def _(func, input, dim):
+    return ops.unsqueeze_default(NJT2, func, input=input, dim=dim)
+
+@register_njt2(torch.nn.functional.linear)
+def _(func, input, weight, bias=None):
+    return ops.linear_default(NJT2, func, input=input, weight=weight, bias=bias)
+
+@register_njt2(torch.sum)
+def _(func, input, dim=None, keepdim=False, *, dtype=None):
+    if dim is None:
+        dim = list(range(input.dim()))
+    return ops.sum_dim_IntList(NJT2, func, input=input, dim=dim, keepdim=keepdim, dtype=dtype)
+
+# TODO(rzou): not sure the eps
+@register_njt2(torch.nn.functional.layer_norm)
+def _(func, input, normalized_shape, weight=None, bias=None, eps=1e-6):
+    return ops.native_layer_norm_default(NJT2, torch.ops.aten.native_layer_norm.default, input=input, normalized_shape=normalized_shape, weight=weight, bias=bias, eps=eps)[0]
+
+@register_njt2(torch.nn.functional.scaled_dot_product_attention)
+def _(func, *args, **kwargs):
+    return ops.jagged_scaled_dot_product_attention(NJT2, *args, **kwargs)
+
+@register_njt2([
+    torch.ops.aten.view,
+    torch.ops.aten._unsafe_view,
+])
+def _(func, self, size):
+    return ops.view_default(NJT2, func, input=self, size=size)
+
+@register_njt2(torch.ops.aten.expand)
+def _(func, self, size, implicit=False):
+    return ops.expand_default(NJT2, func, input=self, size=size, implicit=implicit)
