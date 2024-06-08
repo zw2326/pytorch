@@ -1363,6 +1363,7 @@ def export(
             capture_scalar_outputs=True,
             prefer_deferred_runtime_asserts_over_guards=prefer_deferred_runtime_asserts_over_guards,
             _allow_complex_guards_as_runtime_asserts=_allow_complex_guards_as_runtime_asserts,
+            use_single_step_graph=False,
         ):
             opt_f = optimize_assert(
                 dynamo_normalization_capturing_compiler,
