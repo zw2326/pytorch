@@ -2,7 +2,7 @@ import timeit
 
 import torch.fx
 
-N = 100000
+N = 10000#0
 K = 1000
 
 
