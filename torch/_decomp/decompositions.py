@@ -1792,7 +1792,7 @@ def native_batch_norm_helper(
     )
 
 
-@register_decomposition(aten.native_batch_norm)
+# @register_decomposition(aten.native_batch_norm)
 @out_wrapper("out", "save_mean", "save_invstd")
 def native_batch_norm(
     input: Tensor,

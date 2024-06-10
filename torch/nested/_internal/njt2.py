@@ -17,6 +17,22 @@ class NestedInt:
     def __repr__(self):
         return f"j{self._id}"
 
+    def __mul__(self, other):
+        return NestedIntMul(self, other)
+
+    def __rmul__(self, other):
+        return NestedIntMul(other, self)
+
+
+class NestedIntMul(NestedInt):
+    def __init__(self, a, b):
+        super().__init__(None)
+        self.a = a
+        self.b = b
+
+    def __repr__(self):
+        return f"{self.a}*{self.b}"
+
 # TODO(rzou: weak key dictionary
 NESTED_INT_CACHE = {}
 
@@ -47,13 +63,17 @@ class NJT2:
 
     def lengths(self):
         return self._lengths
-    
+
+    def numel(self):
+        return self._values.numel()
+
     @property
     def _lengths(self):
         return None
 
     def requires_grad_(self, requires_grad):
         self._values.requires_grad_(requires_grad)
+        return self
 
     @property
     def dtype(self):
@@ -63,11 +83,28 @@ class NJT2:
     def device(self):
         return self._values.device
 
+    def is_contiguous(self, *args, **kwargs):
+        return ops.is_contiguous_general(NJT2, torch.ops.aten.is_contiguous.default, input=self, *args, **kwargs)
+
     @property
     def shape(self):
         sizes = [self._offsets.shape[0] - 1, *self._values.shape]
         sizes[self._ragged_idx] = self._nested_int
         return tuple(sizes)
+
+    def stride(self, dim=None):
+        outer_stride = 1
+        for s in self._values.stride():
+            outer_stride *= s
+
+        strides = [outer_stride * self._nested_int, *self._values.stride()]
+        result = tuple(strides)
+        if dim is None:
+            return result
+        return result[dim]
+
+    def storage_offset(self):
+        return self._values.storage_offset()
 
     @property
     def _size(self):
@@ -91,9 +128,6 @@ class NJT2:
 
     def dim(self):
         return self._values.dim() + 1
-
-    def is_contiguous(self):
-        return self._values.is_contiguous()
 
     @property
     def is_nested(self):
@@ -166,6 +200,7 @@ bind_method([
     "chunk",
     "squeeze",
     "unsqueeze",
+    "clone",
 ])
 
 def register_njt2(func):
@@ -245,6 +280,7 @@ def _(func, inputs, chunks, dim=0):
     torch.empty_like,
     torch.randn_like,
     torch.rand_like,
+    torch.clone,
     torch.nn.functional.relu,
     torch.nn.functional.silu,
     torch.ops.aten._to_copy,
@@ -300,12 +336,13 @@ def _(func, input, dim=None, keepdim=False, *, dtype=None):
 
 # TODO(rzou): not sure the eps
 @register_njt2(torch.nn.functional.layer_norm)
-def _(func, input, normalized_shape, weight=None, bias=None, eps=1e-6):
+def _(func, input, normalized_shape, weight=None, bias=None, eps=1e-5):
     return ops.native_layer_norm_default(NJT2, torch.ops.aten.native_layer_norm.default, input=input, normalized_shape=normalized_shape, weight=weight, bias=bias, eps=eps)[0]
 
-@register_njt2(torch.nn.functional.scaled_dot_product_attention)
-def _(func, *args, **kwargs):
-    return ops.jagged_scaled_dot_product_attention(NJT2, *args, **kwargs)
+# TODO(rzou): segfault
+# @register_njt2(torch.nn.functional.scaled_dot_product_attention)
+# def _(func, *args, **kwargs):
+#     return ops.jagged_scaled_dot_product_attention(NJT2, *args, **kwargs)
 
 @register_njt2([
     torch.ops.aten.view,
@@ -317,3 +354,27 @@ def _(func, self, size):
 @register_njt2(torch.ops.aten.expand)
 def _(func, self, size, implicit=False):
     return ops.expand_default(NJT2, func, input=self, size=size, implicit=implicit)
+
+@register_njt2(torch.ops.aten.is_non_overlapping_and_dense.default)
+def _(func, self, *args, **kwargs):
+    return func(self._values, *args, **kwargs)
+
+@register_njt2(torch.ops.aten.sym_size.default)
+def _(func, self, *args, **kwargs):
+    return self.size(*args, **kwargs)
+
+@register_njt2(torch.ops.aten.dim.default)
+def _(func, self, *args, **kwargs):
+    return self.dim()
+
+@register_njt2([torch.ops.aten.numel.default, torch.ops.aten.sym_numel.default])
+def _(func, self, *args, **kwargs):
+    return self.numel()
+
+@register_njt2([torch.ops.aten.stride.default, torch.ops.aten.sym_stride.default])
+def _(func, self, *args, **kwargs):
+    return self.stride(*args, **kwargs)
+
+@register_njt2([torch.ops.aten.sym_storage_offset.default])
+def _(func, self, *args, **kwargs):
+    return self.storage_offset()
