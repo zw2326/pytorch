@@ -4,6 +4,8 @@ import torch
 from torch._C import DispatchKey, DispatchKeySet
 from torch._prims_common import is_expandable_to
 from torch.fx.experimental.symbolic_shapes import has_free_symbols
+from torch.fx.experimental.sym_node import SymNode, NestedIntNode
+from torch.nested._internal import union_find
 from torch.utils.weak import WeakTensorKeyDictionary
 from typing import *  # noqa: F403
 
@@ -11,14 +13,15 @@ _tensor_id_counter = 0
 _tensor_symint_registry = WeakTensorKeyDictionary()
 
 
-def get_tensor_symint(tensor, *, coeff=1):
-    global _tensor_id_counter
-    tensor_symint = _tensor_symint_registry.get(tensor)
-    if tensor_symint is None:
-        tensor_symint = torch._C._get_nested_int(_tensor_id_counter, coeff)
-        _tensor_id_counter += 1
-        _tensor_symint_registry[tensor] = tensor_symint
-    return tensor_symint
+def get_nested_symint(tensor, coeff=1, for_hint=False):
+    if isinstance(tensor, torch._subclasses.functional_tensor.FunctionalTensor):
+        tensor = torch._from_functional_tensor(tensor.elem)
+        return get_nested_symint(tensor, coeff=coeff)
+    if (isinstance(tensor, torch._subclasses.fake_tensor.FakeTensor)) and not for_hint:
+        return tensor.get_nested_int()
+    uf = union_find.get_union_find()
+    t_id = uf._tensor_int_map.get_int(tensor)
+    return torch.SymInt(NestedIntNode(t_id, tensor, coeff))
 
 
 # SDPA metadata; max / min seqlens are needed for e.g. flash
@@ -90,7 +93,7 @@ class NestedTensor(torch.Tensor):
         # Query cache for the symint associated with offsets or lengths
         # (create a new one if needed).
         ragged_source = offsets if lengths is None else lengths
-        ragged_size = get_tensor_symint(ragged_source, coeff=1)
+        ragged_size = get_nested_symint(ragged_source, coeff=1)
         self._ragged_idx = kwargs.get("_ragged_idx", 1)
         B = offsets.shape[0] - 1
         if lengths is not None:
@@ -185,16 +188,7 @@ class NestedTensor(torch.Tensor):
         offsets = inner_tensors["_offsets"]
         lengths = inner_tensors.get("_lengths", None)
         ragged_idx = meta["ragged_idx"]
-
-        # Note that we cannot simply check if is_fake(values) because
-        # during aot autograd, FunctionalTensors are not fake but hold
-        # symbolic sizes.
         ragged_source = offsets if lengths is None else lengths
-        if has_free_symbols(ragged_source) or has_free_symbols(values):
-            # Associate offsets or lengths (possibly fake, possibly functionalized)
-            # with the ragged_size.
-            ragged_size = outer_size[ragged_idx]
-            _tensor_symint_registry[ragged_source] = ragged_size
 
         return NestedTensor(
             values,
