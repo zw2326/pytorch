@@ -1088,9 +1088,9 @@ TEST(StaticRuntime, autogen_cosh) {
 
 TEST(StaticRuntime, autogen_cumprod) {
   const std::string script = R"IR(
-    graph(%self: Tensor, %dim: int, %dtype: int?):
+    graph(%self: Tensor, %dim: int, %dtype: int?, %prepend: bool):
         %bias: None = prim::Constant()
-        %ret = aten::cumprod(%self, %dim, %dtype)
+        %ret = aten::cumprod(%self, %dim, %dtype, %prepend)
         %cloned = aten::clone(%ret, %bias)
         return (%cloned)
   )IR";
@@ -1098,7 +1098,8 @@ TEST(StaticRuntime, autogen_cumprod) {
   auto self0 = at::rand({6, 6, 6});
   auto dim0 = 1;
   auto dtype0 = at::ScalarType::Float;
-  std::vector<IValue> args{self0, dim0, dtype0};
+  auto prepend0 = false;
+  std::vector<IValue> args{self0, dim0, dtype0, prepend0};
   testStaticRuntime(
       script,
       args,
@@ -1110,7 +1111,8 @@ TEST(StaticRuntime, autogen_cumprod) {
   auto self1 = at::rand({22, 22, 22});
   auto dim1 = 1;
   auto dtype1 = at::ScalarType::Float;
-  std::vector<IValue> args2{self1, dim1, dtype1};
+  auto prepend1 = false;
+  std::vector<IValue> args2{self1, dim1, dtype1, prepend1};
   testStaticRuntime(
       script,
       args,

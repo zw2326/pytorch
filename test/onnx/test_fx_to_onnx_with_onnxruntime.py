@@ -1374,6 +1374,10 @@ class TestFxToOnnxFakeTensorWithOnnxRuntime(onnx_test_common._TestONNXRuntime):
         error_message="SymIntArrayRef expected to contain only concrete integers",
         model_type=pytorch_test_common.TorchModelType.TORCH_NN_MODULE,
     )
+    @pytorch_test_common.xfail(
+        error_message="aten::cumsum",
+        reason="https://github.com/pytorch/pytorch/pull/127675",
+    )
     def test_fake_tensor_mode_huggingface_bigscience_bloom_560m(self):
         config = transformers.BloomConfig()
         batch, seq = 4, 256

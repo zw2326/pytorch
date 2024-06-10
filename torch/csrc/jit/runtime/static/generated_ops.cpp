@@ -696,18 +696,19 @@ REGISTER_OPERATOR_FUNCTOR(aten::cosh, aten_cosh, [](Node* n) -> SROperator {
 
 REGISTER_OPERATOR_FUNCTOR(aten::cumprod, aten_cumprod, [](Node* n) -> SROperator {
   if (n->matches(torch::schema(
-          "aten::cumprod(Tensor self, int dim, *, ScalarType? dtype=None) -> Tensor"))) {
+          "aten::cumprod(Tensor self, int dim, *, ScalarType? dtype=None, bool prepend=False) -> Tensor"))) {
     return [](ProcessedNode* p_node) {
       const auto& self = p_node->Input(0).toTensor();
       const auto dim = p_node->Input(1).toInt();
       const auto dtype = p_node->Input(2).toOptional<at::ScalarType>();
+      const auto prepend = p_node->Input(3).toBool();
       if (p_node->Output(0).isNone()) {
-        p_node->Output(0) = at::cpu::cumprod(self, dim, dtype);
+        p_node->Output(0) = at::cpu::cumprod(self, dim, dtype, prepend);
         return;
       }
       auto& out = p_node->Output(0).toTensor();
       fastResizeToZero(out);
-      at::cpu::cumprod_out(out, self, dim, dtype);
+      at::cpu::cumprod_out(out, self, dim, dtype, prepend);
     };
   }
   LogAndDumpSchema(n);
