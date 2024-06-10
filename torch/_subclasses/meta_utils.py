@@ -197,6 +197,15 @@ class MetaTensorDescriber:
         is_functorch_batched_or_grad = is_batchedtensor_v or is_gradtrackingtensor_v
         is_functional = torch._is_functional_tensor(t)
 
+        uf = torch.nested._internal.union_find.get_union_find()
+        union_find_id, cached_max, cached_min = None, None, None
+        if uf.is_registered(t):
+            union_find_id = uf._tensor_int_map.get_int(uf.find(t))
+            # TODO: rename the field to make it generically "max"
+            cached_metadata = uf.get_metadata(t)
+            cached_max = cached_metadata.get("_max_seqlen", None)
+            cached_min = cached_metadata.get("_min_seqlen", None)
+
         storage = None
         # NB: For compatibility, I default this to zero, as sometimes people
         # still have stuffed zero into storage offset even though the tensor
@@ -354,6 +363,9 @@ class MetaTensorDescriber:
             functorch_stack=maybe_functorch_stack,
             autograd_meta_from=autograd_meta_from,
             current_level=current_level,
+            union_find_id=union_find_id,
+            cached_max=cached_max,
+            cached_min=cached_min,
         )
 
 
@@ -412,6 +424,10 @@ class MetaTensorDesc:
     attrs: Optional[Dict[str, MetaTensorDesc]] = None  # is_traceable_wrapper_subclass
     creation_meta: Optional[CreationMeta] = None
     grad: Optional[MetaTensorDesc] = None
+
+    union_find_id: Optional[int] = None
+    cached_max: Optional[int] = None
+    cached_min: Optional[int] = None
 
     # Everything below is NOT serializable, need some more work
     ctx: Optional[object] = None  # is_traceable_wrapper_subclass
@@ -588,6 +604,33 @@ class MetaConverter:
             else:
                 return (t.size, t.stride, t.storage_offset)
 
+        def handle_union_find(t_descr, t_fake):
+            # print(shape_env)
+            if shape_env is None:
+                return
+                # breakpoint()
+            union_find_id = t_descr.union_find_id
+            weak_prev = shape_env.union_find_id_map.get(union_find_id)
+            # Replicate the union find structure in the fake world
+            if weak_prev is None:
+                shape_env.union_find_id_map[union_find_id] = weakref.ref(t_fake)
+            else:
+                # Just use the global union_find is okay?
+                uf = torch.nested._internal.union_find.get_union_find()
+                if weak_prev() is not None:
+                    # TODO: when is this None?
+                    uf.merge(weak_prev(), t_fake)
+
+            # Replicate the metadata
+            uf = torch.nested._internal.union_find.get_union_find()
+            cached_metadata = uf.get_metadata(t_fake)
+            # TODO: we could instead use the hint to make this a real symint
+            # but should not be necessary for NestedTensors
+            if t_descr.cached_max is not None:
+                cached_metadata["_max_seqlen"] = shape_env.create_unbacked_symint()
+            if t_descr.cached_max is not None:
+                cached_metadata["_min_seqlen"] = shape_env.create_unbacked_symint()
+
         def empty_create(
             inner_t: MetaTensorDesc, inner_src, symbolic_context=symbolic_context
         ):
@@ -652,6 +695,9 @@ class MetaConverter:
                 )
                 for attr, inner_t in t.attrs.items()
             }
+
+            for attr, inner_t in t.attrs.items():
+                handle_union_find(inner_t, transformed_tensors_dict[attr])
 
             sub = t.type.__tensor_unflatten__(
                 transformed_tensors_dict, t.ctx, outer_size, outer_stride
@@ -1288,6 +1334,8 @@ class MetaConverter:
             )
             assert_metadata_eq(assert_eq, t, r, skip_symbolic=True, skip_leaf=skip_leaf)
             self.set_tensor_memo(t, r)
+
+            handle_union_find(t, r)
 
         return self.get_tensor_memo(t)
 
