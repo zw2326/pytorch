@@ -2643,6 +2643,39 @@ else:
         # Check that output maintained correct shape
         self.assertEqual(raw_tensor.shape, raw_tensor.grad.shape)
 
+        # check prepend=True cases
+        x = torch.tensor([[1, 2, 3],
+                          [4, 5, 6]], device=device, dtype=torch.int32)
+
+        prepend_cumsum = x.cumsum(0, prepend=True)
+        standard_cumsum = x.cumsum(0, prepend=False)
+        self.assertEqual(standard_cumsum, prepend_cumsum[1:, :])
+
+        prepend_cumsum = x.cumsum(1, prepend=True)
+        standard_cumsum = x.cumsum(1, prepend=False)
+        self.assertEqual(standard_cumsum, prepend_cumsum[:, 1:])
+
+        prepend_cumsum = torch.tensor([], dtype=prepend_cumsum.dtype)
+        standard_cumsum = x.cumsum(0, prepend=False)
+        torch.cumsum(x, 0, prepend=True, out=prepend_cumsum)
+        self.assertEqual(standard_cumsum, prepend_cumsum[1:, :])
+
+        prepend_cumsum = x.clone()
+        with self.assertRaisesRegex(RuntimeError, "Bad in-place call"):
+            prepend_cumsum.cumsum_(0, prepend=True)
+
+        scalar_tensor = torch.tensor(3., device=device)
+        with self.assertRaisesRegex(RuntimeError, "prepend=True requires input.dim\\(\\) to be at least one"):
+            ret = scalar_tensor.cumsum(dim=-1, prepend=True)
+
+        prepend_input = torch.tensor([1., 2., 3., 4.], device=device, requires_grad=True)
+        standard_input = torch.tensor([1., 2., 3., 4.], device=device, requires_grad=True)
+        prepend_result = prepend_input.cumsum(0, prepend=True)
+        standard_result = standard_input.cumsum(0, prepend=False)
+        (prepend_result * torch.arange(1, 6)).sum().backward()
+        (standard_result * torch.arange(2, 6)).sum().backward()
+        self.assertEqual(prepend_input.grad, standard_input.grad)
+
     @skipIfMps
     def test_cumprod(self, device):
         x = torch.rand(100, 100, device=device)
