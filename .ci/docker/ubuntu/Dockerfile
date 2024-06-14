@@ -209,3 +209,13 @@ ENV CUDA_PATH /usr/local/cuda
 
 USER jenkins
 CMD ["bash"]
+
+RUN echo "printing info"
+RUN conda info
+RUN echo $LD_LIBRARY_PATH
+
+ENV LD_LIBRARY_PATH /opt/conda/envs/py_${ANACONDA_PYTHON_VERSION}/lib
+
+RUN echo "printing info"
+RUN conda info
+RUN echo $LD_LIBRARY_PATH
