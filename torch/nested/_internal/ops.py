@@ -9,7 +9,14 @@ from torch.nested._internal.sdpa import jagged_scaled_dot_product_attention
 from .nested_tensor import NestedTensor
 from typing import *  # noqa: F403
 import torch.nn.functional as F
-from torch.fx.operator_schemas import normalize_function
+from torch.fx.operator_schemas import get_normalizer_function
+from torch.fx.operator_schemas import normalize_function as normalize_function_orig
+
+
+def normalize_function(func, args, kwargs, normalize_to_only_use_kwargs):
+    assert normalize_to_only_use_kwargs
+    return get_normalizer_function(func, args, kwargs)(args, kwargs)
+
 
 __all__: List[Any] = []
 
@@ -304,7 +311,7 @@ def jagged_torch_function(func, *args, **kwargs):
         def _flatten_sig(input, start_dim=0, end_dim=-1):
             pass
 
-        _, new_kwargs = normalize_function(
+        _, new_kwargs = normalize_function_orig(
             _flatten_sig, args=args, kwargs=kwargs, normalize_to_only_use_kwargs=True
         )
 
