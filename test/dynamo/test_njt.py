@@ -358,7 +358,7 @@ class TestNestedTensor(torch._dynamo.test_case.TestCase):
         a = torch.randn(2, 3, requires_grad=True, dtype=torch.float64)
         b = torch.randn(3, 3, requires_grad=True, dtype=torch.float64)
         c = torch.randn(4, 3, requires_grad=True, dtype=torch.float64)
-        nt = torch.nested.as_nested_tensor([a, b, c], layout=torch.jagged)
+        nt = torch.nested.as_nested_tensor2([a, b, c], layout=torch.jagged)
         # TODO: Switch to public API when it exists
         nt2, _ = jagged_from_list2([a, b, c], nt.offsets())
 
@@ -368,6 +368,7 @@ class TestNestedTensor(torch._dynamo.test_case.TestCase):
             return torch.add(nt1, nt2).sin().cos()
 
         compiled_f = torch.compile(fn1, fullgraph=True, backend=backend, dynamic=True)
+        compiled_f = fn1
         out = compiled_f(nt, nt2)
         out_buffer = out.values()
         ga, gb, gc = torch.autograd.grad(out_buffer.sum(), (a, b, c))
