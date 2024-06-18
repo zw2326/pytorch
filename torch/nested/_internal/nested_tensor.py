@@ -10,6 +10,8 @@ from typing import *  # noqa: F403
 _tensor_id_counter = 0
 _tensor_symint_registry = WeakTensorKeyDictionary()
 
+USE_NJT2 = None
+
 
 def get_tensor_symint(tensor, *, coeff=1):
     global _tensor_id_counter
@@ -287,6 +289,9 @@ class ViewNestedFromBuffer(torch.autograd.Function):
 
 
 def buffer_from_jagged(jagged):
+    from .njt2 import NJT2
+    if isinstance(jagged, NJT2):
+        return jagged._values
     return ViewBufferFromNested.apply(jagged)
 
 def jagged_from_list2(*args, **kwargs):
@@ -301,6 +306,9 @@ def jagged_from_list(
     njt2=False,
 ) -> Tuple[NestedTensor, torch.Tensor]:
     """Constructs a NestedTensor backed by jagged layout from a list of tensors"""
+
+    if USE_NJT2 is not None:
+        njt2 = USE_NJT2
 
     if not len(set(t.dtype for t in tensors)) == 1:  # noqa: C401
         raise RuntimeError(
@@ -366,6 +374,10 @@ def jagged_from_tensor_and_lengths(
     tensor: torch.Tensor, starts: torch.Tensor, lengths: torch.Tensor, njt2=False
 ) -> Tuple[NestedTensor, torch.Tensor, Optional[torch.Tensor]]:
     """Constructs a NestedTensor backed by jagged layout from a tensor, starts of sequences, and sequence lengths"""
+
+    if USE_NJT2 is not None:
+        njt2 = USE_NJT2
+
     batch_size = tensor.shape[0]
     if is_expandable_to(starts.shape, (batch_size,)) and is_expandable_to(
         lengths.shape, (batch_size,)
@@ -447,6 +459,9 @@ def _nt_view_dummy() -> torch.Tensor:
 
 
 def nested_view_from_values_offsets(values, offsets, ragged_idx=1, njt2=False):
+    if USE_NJT2 is not None:
+        njt2 = USE_NJT2
+
     if njt2:
         from .njt2 import NJT2
         return NJT2(values, offsets, _ragged_idx=ragged_idx)

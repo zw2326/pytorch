@@ -3,6 +3,7 @@ import itertools
 from torch import Tensor
 from typing import List, Optional, Tuple
 from . import ops
+import torch.utils._pytree as pytree
 
 NJT_OPS = {}
 
@@ -117,9 +118,6 @@ class NJT2:
     def _size(self):
         return self.shape
 
-    def detach(self):
-        return torch.ops.aten.detach(self)
-
     @property
     def requires_grad(self):
         return self._values.requires_grad
@@ -204,19 +202,18 @@ def bind_method(api):
         for a in api:
             bind_method(a)
 
-bind_method([
-    "unbind",
-    "sin",
-    "cos",
-    "neg",
-    "abs",
-    "transpose",
-    "chunk",
-    "squeeze",
-    "unsqueeze",
-    "clone",
-    "flatten",
-])
+method_attrs = []
+for attr in dir(torch.Tensor):
+    if attr.startswith("_"):
+        continue
+    if attr in {"dtype", "numel", "device", "layout", "jagged"}:
+        continue
+    if attr in dir(NJT2):
+        continue
+    if hasattr(torch, attr):
+        method_attrs.append(attr)
+
+bind_method(method_attrs)
 
 def register_njt2(func):
     if callable(func):
@@ -284,6 +281,10 @@ import torch.nn.functional as F
 @register_njt2(torch.flatten)
 def _(func, *args, **kwargs):
     return ops.jagged_torch_function(func, *args, **kwargs)
+
+@register_njt2(torch.detach)
+def _(func, *args, **kwargs):
+    return torch.ops.aten.detach(*args, **kwargs)
 
 @register_njt2(torch.chunk)
 def _(func, inputs, chunks, dim=0):
@@ -409,6 +410,16 @@ def _(func, self, *args, **kwargs):
 def _(func, self, *args, **kwargs):
     return self.storage_offset()
 
+@register_njt2(torch.autograd.grad)
+def _(func, outputs, inputs, grad_outputs=None, **kwargs):
+    if grad_outputs is not None:
+        assert isinstance(outputs, NJT2) == isinstance(grad_outputs, NJT2)
+    unwrap = lambda x: x._values if isinstance(x, NJT2) else x
+    outputs_, inputs_, grad_outputs_ = pytree.tree_map(unwrap, (outputs, inputs, grad_outputs))
+    results = torch.autograd.grad(outputs_, inputs_, grad_outputs_, **kwargs)
+    results = tuple([njt_like(i, r) if isinstance(i, NJT2) else r for r, i in zip(results, inputs)])
+    return results
+
 # TODO(rzou): needs a good hard look
 import dataclasses
 
@@ -421,7 +432,134 @@ class SDPAParams:
     dropout: float
     is_causal: bool
 
-# @register_njt2(torch.nested._internal.sdpa._select_sdp_backend)
-# def _(func, query, key, value, attn_mask, dropout, is_causal):
-#     params = SPDAParams(query, key, value, attn_mask, dropout, is_causal)
-#     return self.storage_offset()
+@register_njt2(torch.nested._internal.sdpa._select_sdp_backend)
+def _(func, query, key, value, attn_mask, dropout, is_causal):
+    from torch.nested._internal.sdpa import (
+        flash_sdp_enabled,
+        mem_efficient_sdp_enabled,
+        math_sdp_enabled,
+        SDPBackend,
+        _can_use_flash_sdpa_jagged,
+        _can_use_efficient_sdpa_jagged,
+        _can_use_math_sdpa_jagged,
+    )
+
+    def check_all_tensors_on_device(params):
+        return params.query.device.type == "cuda"
+
+    def check_tensor_shapes(params):
+        query_dim = params.query.dim()
+        if not (query_dim == params.key.dim() and query_dim == params.value.dim() and query_dim == 4):
+            return False
+        return True
+
+    def check_for_attn_mask(params):
+        return params.attn_mask is None
+
+    def check_head_dim_size_flash(params):
+        query_size_last = params.query.size(-1)
+        key_size_last = params.key.size(-1)
+        value_size_last = params.value.size(-1)
+        return (query_size_last == key_size_last and query_size_last == value_size_last)
+
+    def check_flash_causal_non_square_seqlens(params):
+        if (params.is_causal and
+                not params.query.is_nested() and not params.key.is_nested() and
+                params.query.shape[-2] != params.key.shape[-2]):
+            return False
+        return True
+
+    def check_dtypes_low_precision(params):
+        query_dtype = params.query.dtype
+        if not (query_dtype == params.key.dtype() and
+                query_dtype == params.value.dtype() and
+                query_dtype in {torch.half, torch.bfloat16}):
+            return False
+        return True
+
+    def can_use_flash_attention(params):
+        constraints = [
+            # check_runtime_disabled_flash,
+            check_all_tensors_on_device,
+            check_tensor_shapes,
+            check_for_attn_mask,
+            check_head_dim_size_flash,
+            # check_flash_attention_hardware_support,
+            # check_requires_grad_and_head_dim_gt192_constraints_on_sm86_89, # sm80 only for now
+            check_flash_causal_non_square_seqlens,
+            check_dtypes_low_precision,
+        ]
+        for constraint in constraints:
+            if not constraint(params):
+                return False
+        return True
+
+
+    def check_head_dim_size_mem_efficient(params):
+        query_size_last = params.query.size(-1)
+        value_size_last = params.value.size(-1)
+        alignment = minimum_gemm_alignment(params)
+        
+        if not (query_size_last == params.key.sym_size(-1) and 
+                query_size_last % alignment == 0 and query_size_last > 0 and 
+                value_size_last % alignment == 0 and value_size_last > 0):
+            return False
+        
+        return True
+
+    def can_use_efficient_attention(params):
+        constraints = [
+            # check_runtime_disabled_mem_efficient,
+            check_all_tensors_on_device,
+            # check_mem_efficient_hardware_support,
+            check_tensor_shapes,
+            check_head_dim_size_mem_efficient,
+        ]
+        for constraint in constraints:
+            if not constraint(params):
+                return False
+        return True
+
+    def minimum_gemm_alignment(params):
+        # dprops = torch.cuda.get_current_device_properties()
+        is_half = (params.query.dtype == torch.float16) or (params.query.dtype == torch.bfloat16)
+        # use_tc = use_tensor_cores(params, dprops, is_half)
+        use_tc = True
+        matmul_alignment_mn = 1
+        # if dprops.major >= 8:
+        if True:
+            matmul_alignment_mn = 4
+        bits_per_scalar = 16 if is_half else 32
+        if use_tc:
+            matmul_alignment_mn = max(matmul_alignment_mn, 128 // bits_per_scalar)
+        return matmul_alignment_mn
+
+    if (
+        not flash_sdp_enabled()
+        and not mem_efficient_sdp_enabled()
+        and not math_sdp_enabled()
+    ):
+        return SDPBackend.ERROR
+
+    ordering = (
+        SDPBackend.FLASH_ATTENTION,
+        SDPBackend.EFFICIENT_ATTENTION,
+        SDPBackend.MATH,
+    )
+
+    params = SDPAParams(query, key, value, attn_mask, dropout, is_causal)
+
+    for backend in ordering:
+        if backend == SDPBackend.FLASH_ATTENTION:
+            if can_use_flash_attention(params) and _can_use_flash_sdpa_jagged(params):
+                return SDPBackend.FLASH_ATTENTION
+        if backend == SDPBackend.EFFICIENT_ATTENTION:
+            if can_use_efficient_attention(params) and _can_use_efficient_sdpa_jagged(
+                params
+            ):
+                return SDPBackend.EFFICIENT_ATTENTION
+        if backend == SDPBackend.MATH:
+            if math_sdp_enabled() and _can_use_math_sdpa_jagged(params):
+                return SDPBackend.MATH
+
+    return SDPBackend.ERROR
