@@ -1567,9 +1567,9 @@ class TorchPatcher:
     @staticmethod
     def suppress_torch_distributed_warnings(fn):
         def inner_fn(*args, **kwargs):
-            warnings.filterwarnings(
-                "ignore", category=UserWarning, module="torch.distributed"
-            )
+            # warnings.filterwarnings(
+            #     "ignore", category=UserWarning, module="torch.distributed"
+            # )
             return fn(*args, **kwargs)
 
         return inner_fn

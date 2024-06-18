@@ -174,6 +174,13 @@ class NJT2:
     def expand(self, *sizes):
         return torch.ops.aten.expand(self, sizes)
 
+    def reshape(self, *sizes):
+        # TODO(rzou): this is not reshape
+        return self.contiguous().view(*sizes)
+
+    def contiguous(self, *args, **kwargs):
+        return njt_like(self, self._values.contiguous(*args, **kwargs))
+
 
 def same_raggedness(a, b):
     return a._offsets is b._offsets and a._ragged_idx == b._ragged_idx
@@ -201,6 +208,7 @@ bind_method([
     "squeeze",
     "unsqueeze",
     "clone",
+    "flatten",
 ])
 
 def register_njt2(func):
@@ -248,8 +256,9 @@ def extract_kwargs(arg):
     torch.sub,
     torch.mul,
     torch.div,
+    torch.ops.aten.threshold_backward,
 ])
-def _(func, input, other, *, out=None, **kwargs):
+def _(func, input, other, *args, out=None, **kwargs):
     a = input
     b = other
     assert isinstance(a, NJT2) or isinstance(b, NJT2)
@@ -257,17 +266,33 @@ def _(func, input, other, *, out=None, **kwargs):
 
     if not isinstance(other, torch.Tensor):
         # unary case
-        return njt_like(input, func(input._values, other, **kwargs))
+        return njt_like(input, func(input._values, other, *args, **kwargs))
 
-    return ops.jagged_binary_pointwise(NJT2, func, input, other, **kwargs)
+    return ops.jagged_binary_pointwise(NJT2, func, input, other, *args, **kwargs)
 
 
 import math
 import torch.nn.functional as F
 
+@register_njt2(torch.flatten)
+def _(func, *args, **kwargs):
+    return ops.jagged_torch_function(func, *args, **kwargs)
+
 @register_njt2(torch.chunk)
 def _(func, inputs, chunks, dim=0):
-    return ops.chunk_default(NJT2, func, inputs=inputs, chunks=chunks, dim=dim)
+    return ops.chunk_default(NJT2, func, input=inputs, chunks=chunks, dim=dim)
+
+@register_njt2([
+    torch.ops.aten.is_same_size
+])
+def _(func, *args, **kwargs):
+    return ops.is_same_size_default(NJT2, func, *args, **kwargs)
+
+@register_njt2(torch.split)
+def _(func, tensor, split_size_or_sections, dim=0):
+    if isinstance(split_size_or_sections, list):
+        return ops.split_with_sizes_default(NJT2, torch.ops.aten.split_with_sizes, input=tensor, split_sizes=split_size_or_sections, dim=dim)
+    return ops.split_tensor(NJT2, torch.ops.aten.split, input=tensor, split_size=split_size_or_sections, dim=dim)
 
 # unary pointwise
 @register_njt2([
@@ -310,8 +335,6 @@ def _(func, input, dim=0):
         values[offsets[i] : (offsets[i] + lengths[i])] for i in range(lengths.shape[0])
     ]
 
-
-
 @register_njt2(torch.transpose)
 def transpose(func, input, dim0, dim1):
     return ops.transpose_int(NJT2, func, input=input, dim0=dim0, dim1=dim1)
@@ -340,9 +363,9 @@ def _(func, input, normalized_shape, weight=None, bias=None, eps=1e-5):
     return ops.native_layer_norm_default(NJT2, torch.ops.aten.native_layer_norm.default, input=input, normalized_shape=normalized_shape, weight=weight, bias=bias, eps=eps)[0]
 
 # TODO(rzou): segfault
-# @register_njt2(torch.nn.functional.scaled_dot_product_attention)
-# def _(func, *args, **kwargs):
-#     return ops.jagged_scaled_dot_product_attention(NJT2, *args, **kwargs)
+@register_njt2(torch.nn.functional.scaled_dot_product_attention)
+def _(func, *args, **kwargs):
+    return ops.jagged_scaled_dot_product_attention(NJT2, *args, **kwargs)
 
 @register_njt2([
     torch.ops.aten.view,
@@ -378,3 +401,20 @@ def _(func, self, *args, **kwargs):
 @register_njt2([torch.ops.aten.sym_storage_offset.default])
 def _(func, self, *args, **kwargs):
     return self.storage_offset()
+
+# TODO(rzou): needs a good hard look
+import dataclasses
+
+@dataclasses.dataclass
+class SDPAParams:
+    query: Tensor
+    key: Tensor
+    value: Tensor
+    attn_mask: Optional[Tensor]
+    dropout: float
+    is_causal: bool
+
+# @register_njt2(torch.nested._internal.sdpa._select_sdp_backend)
+# def _(func, query, key, value, attn_mask, dropout, is_causal):
+#     params = SPDAParams(query, key, value, attn_mask, dropout, is_causal)
+#     return self.storage_offset()

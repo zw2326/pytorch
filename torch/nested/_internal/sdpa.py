@@ -263,6 +263,18 @@ def _can_use_math_sdpa_jagged(params: SDPAParams, debug=False) -> bool:
 
 
 def _select_sdp_backend(query, key, value, attn_mask, dropout, is_causal):
+    if torch.overrides.has_torch_function_variadic(query, key, value, attn_mask):
+        return torch.overrides.handle_torch_function(
+            _select_sdp_backend,
+            (query, key, value, attn_mask),
+            query,
+            key,
+            value,
+            attn_mask,
+            dropout,
+            is_causal,
+        )
+
     if (
         not flash_sdp_enabled()
         and not mem_efficient_sdp_enabled()
