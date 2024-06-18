@@ -33,6 +33,9 @@ class NestedIntMul(NestedInt):
     def __repr__(self):
         return f"{self.a}*{self.b}"
 
+    def __eq__(self, other):
+        return (self.a == other.a and self.b == other.b) or (self.a == other.b and self.b == other.a)
+
 # TODO(rzou: weak key dictionary
 NESTED_INT_CACHE = {}
 
@@ -54,6 +57,10 @@ class NJT2:
     def __class__(self):
         # TODO(rzou): is this bad?
         return torch.Tensor
+
+    @property
+    def is_leaf(self):
+        return self._values.is_leaf
 
     def values(self):
         return self._values

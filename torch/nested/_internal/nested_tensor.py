@@ -359,8 +359,11 @@ def jagged_from_list(
     return (ret_nt, offsets)  # type: ignore[return-value]
 
 
+def jagged_from_tensor_and_lengths2(tensor, starts, lengths):
+    return jagged_from_tensor_and_lengths(tensor, starts,lenghts, njt2=True)
+
 def jagged_from_tensor_and_lengths(
-    tensor: torch.Tensor, starts: torch.Tensor, lengths: torch.Tensor
+    tensor: torch.Tensor, starts: torch.Tensor, lengths: torch.Tensor, njt2=False
 ) -> Tuple[NestedTensor, torch.Tensor, Optional[torch.Tensor]]:
     """Constructs a NestedTensor backed by jagged layout from a tensor, starts of sequences, and sequence lengths"""
     batch_size = tensor.shape[0]
@@ -443,13 +446,22 @@ def _nt_view_dummy() -> torch.Tensor:
     return _dummy_instance
 
 
-def nested_view_from_values_offsets(values, offsets, ragged_idx=1):
+def nested_view_from_values_offsets(values, offsets, ragged_idx=1, njt2=False):
+    if njt2:
+        from .njt2 import NJT2
+        return NJT2(values, offsets, _ragged_idx=ragged_idx)
     return torch._nested_view_from_jagged(  # type: ignore[attr-defined]
         values, offsets, _nt_view_dummy(), None, ragged_idx
     )
+
+def nested_view_from_values_offsets2(values, offsets, ragged_idx=1):
+    return nested_view_from_values_offsets(values, offsets, ragged_idx, njt2=True)
 
 
 def nested_view_from_values_offsets_lengths(values, offsets, lengths, ragged_idx=1):
     return torch._nested_view_from_jagged(  # type: ignore[attr-defined]
         values, offsets, _nt_view_dummy(), lengths, ragged_idx
     )
+
+def nested_view_from_values_offsets_lengths2(values, offsets, lengths, ragged_idx=1):
+    assert False

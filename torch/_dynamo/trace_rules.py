@@ -3216,6 +3216,9 @@ if torch.distributed.is_available():
 # We are using python module name instead of file or directory object to avoid circular dependency.
 # Please keep this sorted alphabetically.
 MOD_INLINELIST = {
+    "torch.nested._internal.njt2",
+    "torch.nested._internal.ops",
+    "torch.fx.operator_schemas",
     "torch._refs",
     "torch._prims",
     "torch._decomp",
