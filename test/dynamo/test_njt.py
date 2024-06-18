@@ -314,8 +314,6 @@ class TestNestedTensor(torch._dynamo.test_case.TestCase):
         return jagged_from_tensor_and_lengths2(values_tensor, starts, lengths)
 
     def _check_recompiles(self, fn, inputs1, inputs2, expected_recompiles):
-        # TODO(rzou): !!!!!!!
-        return
         actual_recompiles = _recompiles_for_inputs(fn, inputs1, inputs2)
         self.assertEqual(actual_recompiles, expected_recompiles)
 
