@@ -184,7 +184,7 @@ class SpeculationLog:
             and entry.lineno == lineno
         ), textwrap.dedent(
             f"""
-            SpecuationLog diverged at {self.index} of {len(self.entries)}:
+            SpeculationLog diverged at {self.index} of {len(self.entries)}:
             - Run1: {entry.filename}:{entry.lineno} (ip={entry.instruction_pointer})
             - Run2: {filename}:{lineno} (ip={instruction_pointer})
             Please submit a bug report.
@@ -2445,10 +2445,22 @@ class InstructionTranslator(InstructionTranslatorBase):
             torch._C._functorch.TransformType.Grad,
             torch._C._functorch.TransformType.Jvp,
         )
+
+        # Is there a better way to detect this?
+        from_eager = counters.get("graph_break", None) is None
+
         if ci is not None and ci.key() in forbidden_keys and compiler_fn is not eager:
-            # if it reaches here, it means Dynamo failed to inline a functorch function
             name = ci.key().name.lower()
-            msg = f"torch.func.{name}(fn) requires the function to be inlined by dynamo"
+            if from_eager:
+                # calling from eager
+                msg = (
+                    f"Calling torch.func.{name}(compiled_fn) function from eager mode is not supported. "
+                    f"Ensure that torch.func.{name} is also wrapped within a torch.compile function. "
+                    "For more information, see PyTorch issue #128711."
+                )
+            else:
+                # if it reaches here, it means Dynamo failed to inline a functorch function
+                msg = f"torch.func.{name}(fn) requires the function to be inlined by dynamo"
             unimplemented(msg)
 
     def get_example_value(self, source: Source):
