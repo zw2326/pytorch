@@ -837,20 +837,25 @@ class WrapperCodeGen(CodeGen):
             for call_str in call_strs:
                 self.writeline(call_str)
 
-    # @Yueming TODO: fix this
+    # @Yueming TODO: Is this correct?
     def generate_user_defined_triton_kernel(
-        self, kernel_name, grid, configs, args, triton_meta, arg_types=None
+        self, kernel_name, grid, configs, args, triton_meta, arg_types=None, origin_node=None
     ):
         grid, code = user_defined_kernel_grid_fn_code(
             kernel_name, configs, grid, wrapper=self
         )
+        call_strs = []
         # Must happen after free symbols are already codegened
         # Emit the grid wrapper function right before the call
         for line in code.split("\n"):
             self.writeline(line)
 
-        current_device = V.graph.scheduler.get_current_device_or_throw()
-        stream_name = self.write_get_raw_stream(current_device.index, V.graph)
+        if config.multiple_streams:
+            ssnode = V.graph.stream_graph.name_mapping[origin_node.get_name()]
+            stream_id = ssnode.stream_id
+        else:
+            current_device = V.graph.scheduler.get_current_device_or_throw()
+            stream_name = self.write_get_raw_stream(current_device.index, V.graph)
         self.writeline(
             f"{kernel_name}.run({', '.join(args)}, grid={grid}, stream={stream_name})"
         )
@@ -878,13 +883,15 @@ class WrapperCodeGen(CodeGen):
         else:
             self.writeline(line)
 
-    # @Yueming TODO: fix this
-    def generate_index_put_fallback(self, kernel, x, indices, values, accumulate):
+    def generate_index_put_fallback(self, kernel, x, indices, values, accumulate, origin_node=None):
         indices_str = f"{self.open_bracket}{', '.join(indices)}{self.closed_bracket}"
         args = [x, indices_str, values, accumulate]
-        self.writeline(self.wrap_kernel_call(kernel, args))
+        if config.multiple_streams:
+            self.generate_extern_kernel_w_stream(origin_node.get_name(), self.wrap_kernel_call(kernel, args))
+        else:
+            self.writeline(self.wrap_kernel_call(kernel, args))
 
-    # @Yueming TODO: fix this
+    # @Yueming TODO: fix this. It is used in cpp wrapper I think. So, postpone this fix.
     def generate_extern_kernel_alloc_and_find_schema_if_needed(
         self,
         buf_name: str,

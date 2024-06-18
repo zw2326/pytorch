@@ -396,7 +396,7 @@ class SSGraph:
             if len(predecessor.successors) == 1:
                 tmp_queue.append(predecessor)
         if len(tmp_queue) == 0:
-            log.warning("This graph has no nodes whose single successor is the OUTPUT node.")
+            log.warning("This graph doesn't have nodes whose single successor is the OUTPUT node.")
             for predecessor in output_node.predecessors.values():
                 tmp_queue.append(predecessor)
         finished = set()

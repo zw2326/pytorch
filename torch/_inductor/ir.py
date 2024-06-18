@@ -4684,7 +4684,7 @@ class UserDefinedTritonKernel(ExternKernel):
         # Call to kernel
         self.codegen_comment(wrapper)
         wrapper.generate_user_defined_triton_kernel(
-            new_name, self.grid, configs, args, triton_meta, arg_types
+            new_name, self.grid, configs, args, triton_meta, arg_types, origin_node=self
         )
 
     def should_allocate(self):
@@ -5055,7 +5055,7 @@ class IndexPutFallback(ExternKernel):
                 indices.append(V.graph.wrapper_code.none_str)
 
         wrapper.generate_index_put_fallback(
-            self.get_kernel_name(), x, indices, values, *self.codegen_const_args()
+            self.get_kernel_name(), x, indices, values, *self.codegen_const_args(), origin_node=self
         )
 
     def should_allocate(self):
