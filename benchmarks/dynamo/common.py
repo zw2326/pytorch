@@ -680,7 +680,14 @@ def speedup_experiment(args, model_iter_fn, model, example_inputs, **kwargs):
     tolerance = args.xla_tolerance if args.trace_on_xla else 1e-4
     torch._dynamo.config.repro_tolerance = tolerance
 
-    with maybe_profile(args.export_profiler_trace) as p:
+    with maybe_profile(
+        args.export_profiler_trace,
+        activities=[
+            torch.profiler.ProfilerActivity.CPU,
+            torch.profiler.ProfilerActivity.CUDA,
+        ],
+        with_stack=True,
+    ) as p:
         if args.export_aot_inductor:
             frozen_model_iter_fn = export_aot_inductor(
                 model, example_inputs, args.devices[0]
@@ -3410,6 +3417,7 @@ def parse_args(args=None):
         "--compiled-autograd",
         action="store_true",
         help="Enables compiled autograd on compiled benchmark",
+        default=True,
     )
 
     parser.add_argument(
@@ -4066,6 +4074,9 @@ def run(runner, args, original_dir=None):
                 args.profiler_trace_name = "inductor"
             else:
                 args.profiler_trace_name = "profile"
+
+            if args.compiled_autograd:
+                args.profiler_trace_name += "_ca"
         else:
             args.profiler_trace_name = args.profiler_trace_name
 
