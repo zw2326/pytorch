@@ -945,6 +945,7 @@ class CUDAGraphNode:
     def _copy_inputs_and_remove_from_src(self, dsts, srcs):
         dst_tensors = []
         src_tensors = []
+        print(f"non static inds:{self.non_static_input_idx}")
         for idx in self.non_static_input_idx:
             if not isinstance(srcs[idx], torch.Tensor):
                 continue

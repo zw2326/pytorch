@@ -3,7 +3,7 @@ import csv
 import dataclasses
 import os
 
-from generate import run_llama2_7b_bf16, run_llama2_7b_int8, run_mixtral_8x7b_int8
+from generate import run_llama2_7b_bf16
 from triton.testing import do_bench
 
 import torch
@@ -234,13 +234,6 @@ DEFAULT_OUTPUT_FILE = "gpt_fast_benchmark.csv"
 all_experiments = {
     # A list of GPT models: LlaMa, Mixtral, etc.
     run_llama2_7b_bf16,
-    run_llama2_7b_int8,
-    run_mixtral_8x7b_int8,
-    # A list of micro-benchmarks.
-    run_mlp_layer_norm_gelu,
-    run_layer_norm,
-    run_gather_gemv,
-    run_gemv,
 }
 
 

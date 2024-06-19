@@ -62,7 +62,6 @@ def sample(logits, temperature: float = 1.0, top_k: Optional[int] = None):
     return idx_next, probs
 
 
-@torch.compile(fullgraph=True)
 def prefill(
     model: torch.nn.Module, x: torch.Tensor, input_pos: torch.Tensor, **sampling_kwargs
 ) -> torch.Tensor:
@@ -71,7 +70,6 @@ def prefill(
     return sample(logits, **sampling_kwargs)[0]
 
 
-@torch.compile(fullgraph=True, mode="reduce-overhead")
 def decode_one_token(
     model: torch.nn.Module, x: torch.Tensor, input_pos: torch.Tensor, **sampling_kwargs
 ) -> Tuple[torch.Tensor, torch.Tensor]:

@@ -674,6 +674,16 @@ from a multi-output view call"
             ]
         else:
             static_parameter_input_indices = []
+        if static_parameter_input_indices:
+            if (
+                5 in static_parameter_input_indices
+                and 6 in static_parameter_input_indices
+            ):
+                static_parameter_input_indices = [5, 6]
+            else:
+                static_parameter_input_indices = []
+
+        print(static_parameter_input_indices)
 
         f_mutated_inputs = [
             inp

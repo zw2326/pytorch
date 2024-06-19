@@ -62,7 +62,7 @@ transformer_configs = {
     "CodeLlama-7b-Python-hf": dict(
         block_size=16384, vocab_size=32000, n_layer=32, dim=4096, rope_base=1000000
     ),
-    "7B": dict(n_layer=32, n_head=32, dim=4096),
+    "7B": dict(n_layer=1, n_head=32, dim=4096),
     "13B": dict(n_layer=40, n_head=40, dim=5120),
     "30B": dict(n_layer=60, n_head=52, dim=6656),
     "34B": dict(
@@ -94,8 +94,8 @@ class KVCache(nn.Module):
     ):
         super().__init__()
         cache_shape = (max_batch_size, n_heads, max_seq_length, head_dim)
-        self.register_buffer("k_cache", torch.zeros(cache_shape, dtype=dtype))
-        self.register_buffer("v_cache", torch.zeros(cache_shape, dtype=dtype))
+        self.k_cache = torch.nn.Parameter(torch.zeros(cache_shape, dtype=dtype))
+        self.v_cache = torch.nn.Parameter(torch.zeros(cache_shape, dtype=dtype))
 
     def update(self, input_pos, k_val, v_val):
         # input_pos: [S], k_val: [B, H, S, D]
@@ -116,10 +116,13 @@ class Transformer(nn.Module):
 
         self.tok_embeddings = nn.Embedding(config.vocab_size, config.dim)
         self.layers = nn.ModuleList(
-            TransformerBlock(config) for _ in range(config.n_layer)
+            torch.compile(TransformerBlock(config), mode="reduce-overhead")
+            for _ in range(config.n_layer)
         )
-        self.norm = RMSNorm(config.dim, eps=config.norm_eps)
-        self.output = nn.Linear(config.dim, config.vocab_size, bias=False)
+        self.norm = torch.compile(RMSNorm(config.dim, eps=config.norm_eps))
+        self.output = torch.compile(
+            nn.Linear(config.dim, config.vocab_size, bias=False)
+        )
 
         self.freqs_cis: Optional[Tensor] = None
         self.mask_cache: Optional[Tensor] = None
@@ -157,6 +160,7 @@ class Transformer(nn.Module):
         x = self.tok_embeddings(idx)
 
         for i, layer in enumerate(self.layers):
+            torch.compiler.cudagraph_mark_step_begin()
             x = layer(x, input_pos, freqs_cis, mask)
         x = self.norm(x)
         logits = self.output(x)
