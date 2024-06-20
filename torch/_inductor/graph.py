@@ -102,6 +102,8 @@ from torch._inductor.codecache import output_code_log
 log = logging.getLogger(__name__)
 perf_hint_log = torch._logging.getArtifactLogger(__name__, "perf_hints")
 
+output_code_log = torch._logging.getArtifactLogger(__name__, "output_code")
+torch_log = logging.getLogger("torch")
 aten = torch.ops.aten
 
 _post_grad_graph_counter = itertools.count()
@@ -1709,6 +1711,7 @@ class GraphLowering(torch.fx.Interpreter):
         log_module_code(mod.__file__)
         log.debug("Output code written to: %s", mod.__file__)
         output_code_log.info("Output code written to: %s", mod.__file__)
+        torch_log.warning("Output code written to: %s", mod.__file__)
         if config.benchmark_kernel:
             print(f"Compiled module path: {mod.__file__}", file=sys.stderr)
         V.debug.output_code(mod.__file__)
