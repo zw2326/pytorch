@@ -5610,6 +5610,45 @@ class TestNestedTensorSubclass(TestCase):
         for dynamic in [False, True, None]:
             self.assertFalse(_recompiles_for_inputs(f, (nt,), (nt2,), dynamic=dynamic))
 
+    @dtypes(torch.float32, torch.double, torch.half)
+    def test_unbind_backward(self, device, dtype):
+        nt = torch.nested.nested_tensor(
+            [
+                torch.randn(2, 4, device=device),
+                torch.randn(5, 4, device=device),
+                torch.randn(3, 4, device=device),
+            ],
+            layout=torch.jagged,
+            requires_grad=True,
+        )
+
+        a, b, c = nt.unbind()
+        b.sum().backward()
+
+        expected_grad = torch.zeros_like(nt)
+        expected_grad.unbind()[1].add_(1.0)
+        torch._dynamo.disable(self.assertEqual)(nt.grad, expected_grad)
+
+    @dtypes(torch.float32, torch.double, torch.half)
+    @parametrize("requires_grad", [False, True])
+    def test_sum(self, device, dtype, requires_grad):
+        nt = random_nt_from_dims(
+            [5, None, 10],
+            device=device,
+            dtype=dtype,
+            layout=torch.jagged,
+            requires_grad=requires_grad,
+        )
+
+        output = nt.sum()
+        expected_output = nt._values.sum()
+        self.assertEqual(output, expected_output)
+
+        if requires_grad:
+            # ensure gradients flow back correctly
+            output.backward()
+            self.assertEqual(nt.grad, torch.ones_like(nt))
+
 
 instantiate_parametrized_tests(TestNestedTensor)
 instantiate_device_type_tests(TestNestedTensorDeviceType, globals())
