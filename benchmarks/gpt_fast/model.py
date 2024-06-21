@@ -116,14 +116,11 @@ class Transformer(nn.Module):
 
         self.tok_embeddings = nn.Embedding(config.vocab_size, config.dim)
         self.layers = nn.ModuleList(
-            torch.compile(TransformerBlock(config), mode="reduce-overhead")
-            for _ in range(config.n_layer)
+            TransformerBlock(config) for _ in range(config.n_layer)
         )
         self.norm = RMSNorm(config.dim, eps=config.norm_eps)
         self.output = nn.Linear(config.dim, config.vocab_size, bias=False)
-        self.output_norm = torch.compile(
-            lambda x: self.output(self.norm(x)), mode="reduce-overhead"
-        )
+        self.output_norm = lambda x: self.output(self.norm(x))
 
         self.freqs_cis: Optional[Tensor] = None
         self.mask_cache: Optional[Tensor] = None
@@ -162,8 +159,10 @@ class Transformer(nn.Module):
 
         torch.compiler.cudagraph_mark_step_begin()
         for i, layer in enumerate(self.layers):
-            x = layer(x, input_pos, freqs_cis, mask)
-        return self.output_norm(x)
+            x = torch.compile(layer, mode="reduce-overhead")(
+                x, input_pos, freqs_cis, mask
+            )
+        return torch.compile(self.output_norm, mode="reduce-overhead")(x)
 
     @classmethod
     def from_name(cls, name: str):
