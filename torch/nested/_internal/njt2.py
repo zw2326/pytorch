@@ -12,17 +12,22 @@ nid = itertools.count()
 
 class NestedInt:
     def __init__(self, offsets):
-        self._id = next(nid)
+        # self._id = next(nid)
         self._offsets = offsets
 
     def __repr__(self):
-        return f"j{self._id}"
+        return f"j{self._offsets.tolist()}"
 
     def __mul__(self, other):
         return NestedIntMul(self, other)
 
     def __rmul__(self, other):
         return NestedIntMul(other, self)
+
+    def __eq__(self, other):
+        if isinstance(other, NestedInt):
+            return self._offsets is other._offsets
+        return False
 
 
 class NestedIntMul(NestedInt):
@@ -37,9 +42,6 @@ class NestedIntMul(NestedInt):
     def __eq__(self, other):
         return (self.a == other.a and self.b == other.b) or (self.a == other.b and self.b == other.a)
 
-# TODO(rzou: weak key dictionary
-NESTED_INT_CACHE = {}
-
 class NJT2:
     def __repr__(self):
         return f"NJT2(shape={self.shape})"
@@ -48,16 +50,15 @@ class NJT2:
         self._values = values
         self._offsets = offsets
         assert self._values.device == self._offsets.device
-        if self._offsets not in NESTED_INT_CACHE:
-            NESTED_INT_CACHE[self._offsets] = NestedInt(self._offsets)
-        self._nested_int = NESTED_INT_CACHE[self._offsets]
+        # if self._offsets not in NESTED_INT_CACHE:
+        #     NESTED_INT_CACHE[self._offsets] = NestedInt(self._offsets)
+        # self._nested_int = NESTED_INT_CACHE[self._offsets]
         self._ragged_idx = _ragged_idx
         self._metadata_cache = None  # for compatibility
 
     @property
-    def __class__(self):
-        # TODO(rzou): is this bad?
-        return torch.Tensor
+    def _nested_int(self):
+        return NestedInt(self._offsets)
 
     @property
     def is_leaf(self):
@@ -74,6 +75,15 @@ class NJT2:
 
     def numel(self):
         return self._values.numel()
+
+    @property
+    def __class__(self):
+        # TODO(rzou): is this bad?
+       return torch.Tensor
+
+    # # TODO(rzou): assertEqual needs a torch_function hook somehow?
+    # def __eq__(self, other):
+    #     return torch.allclose(self._values, other._values) and torch.equal(self._offsets, other._offsets)
 
     @property
     def _lengths(self):
@@ -167,7 +177,7 @@ class NJT2:
         return njt_like(self, self._values.grad)
 
     def backward(self, grad_output=None):
-        if grad_output is not None and isinstance(grad_output, torch.Tensor):
+        if grad_output is not None and isinstance(grad_output, (torch.Tensor, NJT2)):
             assert same_raggedness(grad_output, self)
             self._values.backward(grad_output._values)
         else:
@@ -268,7 +278,7 @@ def _(func, input, other, *args, out=None, **kwargs):
     assert isinstance(a, NJT2) or isinstance(b, NJT2)
     assert out is None
 
-    if not isinstance(other, torch.Tensor):
+    if not isinstance(other, (torch.Tensor, NJT2)):
         # unary case
         return njt_like(input, func(input._values, other, *args, **kwargs))
 

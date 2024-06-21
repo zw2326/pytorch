@@ -405,11 +405,8 @@ class TestNestedTensorSubclass(TestCase):
         # Correct usage: chain the calls using the same offsets tensor object
         def grad_test_func(a, b, c):
             nt1 = torch.nested.as_nested_tensor2([a, b, c], layout=torch.jagged)
-            nt2 = torch.nested.as_nested_tensor2([a, b, c], layout=torch.jagged)
-            nt2._offsets = nt1._offsets
-            nt2._nested_int = nt1._nested_int
             # TODO: Switch to public API that takes in (values, offsets) once it exists
-            # nt2, offsets = jagged_from_list2([a, b, c], nt1.offsets())
+            nt2, offsets = jagged_from_list2([a, b, c], nt1.offsets())
             out = nt1 * nt2
             return out.values()
 
@@ -459,9 +456,10 @@ class TestNestedTensorSubclass(TestCase):
         nt = torch.nested.as_nested_tensor2([a, b, c], layout=torch.jagged)
         out = torch.split(nt, 2, -1)
         self.assertEqual(len(out), 2)
+        expected = torch.nested.as_nested_tensor2([a[:, 0:2], b[:, 0:2], c[:, 0:2]], layout=torch.jagged)
         self.assertEqual(
             out[0],
-            torch.nested.as_nested_tensor2([a[:, 0:2], b[:, 0:2], c[:, 0:2]], layout=torch.jagged)
+            expected,
         )
         self.assertEqual(
             out[1],
