@@ -1636,9 +1636,7 @@ def cpp_wrapper_flags() -> str:
 
 def optimization_flags() -> str:
     base_flags = "-O0 -g" if config.aot_inductor.debug_compile else "-O3 -DNDEBUG"
-    base_flags += " -ffast-math -fno-finite-math-only"
-    if not config.cpp.enable_unsafe_math_opt_flag:
-        base_flags += " -fno-unsafe-math-optimizations"
+    base_flags += " -fno-math-errno -fno-rounding-math -fno-signaling-nans -fcx-limited-range -fexcess-precision=fast"
     if not config.cpp.enable_floating_point_contract_flag:
         base_flags += " -ffp-contract=off"
 
