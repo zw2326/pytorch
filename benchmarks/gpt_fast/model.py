@@ -157,8 +157,11 @@ class Transformer(nn.Module):
         x = self.tok_embeddings(idx)
 
         for i, layer in enumerate(self.layers):
+            torch._dynamo.graph_break()
             x = layer(x, input_pos, freqs_cis, mask)
+        torch._dynamo.graph_break()
         x = self.norm(x)
+        torch._dynamo.graph_break()
         logits = self.output(x)
         return logits
 
