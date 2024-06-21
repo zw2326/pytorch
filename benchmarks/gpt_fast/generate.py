@@ -74,9 +74,13 @@ def decode_one_token(
     model: torch.nn.Module, x: torch.Tensor, input_pos: torch.Tensor, **sampling_kwargs
 ) -> Tuple[torch.Tensor, torch.Tensor]:
     # input_pos: [B, 1]
-    assert input_pos.shape[-1] == 1
+    # torch.cuda.synchronize()
+    # with torch.profiler.profile() as prof:
     logits = model(x, input_pos)
-    return sample(logits, **sampling_kwargs)
+    assert input_pos.shape[-1] == 1
+    res = sample(logits, **sampling_kwargs)
+    # prof.export_chrome_trace(f"llama_trace.json")
+    return res
 
 
 def decode_n_tokens(
@@ -197,7 +201,7 @@ def run_experiment(
             model, prompt, max_new_tokens, temperature=temperature, top_k=top_k
         )
 
-        if i == -1:
+        if i < 1:
             print(f"Compilation time: {time.perf_counter() - t0:.2f} seconds")
             continue
 

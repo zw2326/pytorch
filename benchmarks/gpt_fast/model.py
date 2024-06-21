@@ -62,7 +62,7 @@ transformer_configs = {
     "CodeLlama-7b-Python-hf": dict(
         block_size=16384, vocab_size=32000, n_layer=32, dim=4096, rope_base=1000000
     ),
-    "7B": dict(n_layer=1, n_head=32, dim=4096),
+    "7B": dict(n_layer=32, n_head=32, dim=4096),
     "13B": dict(n_layer=40, n_head=40, dim=5120),
     "30B": dict(n_layer=60, n_head=52, dim=6656),
     "34B": dict(
@@ -119,9 +119,10 @@ class Transformer(nn.Module):
             torch.compile(TransformerBlock(config), mode="reduce-overhead")
             for _ in range(config.n_layer)
         )
-        self.norm = torch.compile(RMSNorm(config.dim, eps=config.norm_eps))
-        self.output = torch.compile(
-            nn.Linear(config.dim, config.vocab_size, bias=False)
+        self.norm = RMSNorm(config.dim, eps=config.norm_eps)
+        self.output = nn.Linear(config.dim, config.vocab_size, bias=False)
+        self.output_norm = torch.compile(
+            lambda x: self.output(self.norm(x)), mode="reduce-overhead"
         )
 
         self.freqs_cis: Optional[Tensor] = None
@@ -159,12 +160,10 @@ class Transformer(nn.Module):
         freqs_cis = self.freqs_cis[input_pos]
         x = self.tok_embeddings(idx)
 
+        torch.compiler.cudagraph_mark_step_begin()
         for i, layer in enumerate(self.layers):
-            torch.compiler.cudagraph_mark_step_begin()
             x = layer(x, input_pos, freqs_cis, mask)
-        x = self.norm(x)
-        logits = self.output(x)
-        return logits
+        return self.output_norm(x)
 
     @classmethod
     def from_name(cls, name: str):
