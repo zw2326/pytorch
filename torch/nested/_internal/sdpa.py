@@ -111,10 +111,9 @@ def _check_head_dim_size_flash_nested(params: SDPAParams, debug=False) -> bool:
 
 
 def _check_for_seq_len_0_and_consistent_head_dim_nested_helper(
-    njt_class,
     param: torch.Tensor, param_name: str, debug=False
 ) -> bool:
-    assert isinstance(param, njt_class), "param should be a jagged NT"
+    assert param.is_nested, "param should be a jagged NT"
 
     if param._ragged_idx == 1:
         # num_head_dims is ragged
@@ -223,7 +222,6 @@ def _can_use_flash_sdpa_jagged(params: SDPAParams, debug=False) -> bool:
     constraints = (
         _check_batch_size_nested,
         _check_head_dim_size_flash_nested,
-        _check_for_seq_len_0_nested,
     )
     for constraint in constraints:
         if not constraint(params, debug):
@@ -322,7 +320,7 @@ def _cumulative_and_max_seq_len_nnz(qkv: torch.Tensor) -> Tuple[torch.Tensor, in
 
     # It returns a tuple of cumulative sequence lengths and the maximum sequence
     # length, and the last element in the cumulative_sequence_lengths
-    if not isinstance(qkv, njt_class):
+    if not qkv.is_nested:
         raise ValueError("QKV must be nested for flash cumulative_seq_len calculation.")
 
     if qkv.lengths() is None:
@@ -723,7 +721,7 @@ def jagged_scaled_dot_product_attention(
             max_seqlen_batch_q,
             max_seqlen_batch_kv,
             output_nt_info,
-        ) = _sdpa_nested_preprocessing(query, key, value)
+        ) = _sdpa_nested_preprocessing(njt_class, query, key, value)
         (
             attention,
             log_sumexp,

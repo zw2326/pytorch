@@ -10,6 +10,11 @@ NJT_OPS = {}
 
 nid = itertools.count()
 
+
+# SDPA metadata; max / min seqlens are needed for e.g. flash
+def _get_sdpa_extreme_seqlen(func, tensor):
+    return int(func(tensor).item())
+
 class NestedInt:
     def __init__(self, offsets):
         # self._id = next(nid)
@@ -54,7 +59,10 @@ class NJT2:
         #     NESTED_INT_CACHE[self._offsets] = NestedInt(self._offsets)
         # self._nested_int = NESTED_INT_CACHE[self._offsets]
         self._ragged_idx = _ragged_idx
-        self._metadata_cache = None  # for compatibility
+        if _metadata_cache is None:
+            self._metadata_cache = {}
+        else:
+            self._metadata_cache = _metadata_cache
 
     @property
     def _nested_int(self):
@@ -109,6 +117,10 @@ class NJT2:
         sizes = [self._offsets.shape[0] - 1, *self._values.shape]
         sizes[self._ragged_idx] = self._nested_int
         return tuple(sizes)
+
+    @property
+    def _strides(self):
+        return self.stride()
 
     def stride(self, dim=None):
         outer_stride = 1
@@ -196,6 +208,25 @@ class NJT2:
     def contiguous(self, *args, **kwargs):
         return njt_like(self, self._values.contiguous(*args, **kwargs))
 
+    @property
+    def _max_seqlen(self):
+        if "max_seqlen" not in self._metadata_cache:
+            # compute & cache
+            self._metadata_cache["max_seqlen"] = _get_sdpa_extreme_seqlen(
+                torch.max,
+                self._offsets.diff() if self._lengths is None else self._lengths,
+            )
+        return self._metadata_cache["max_seqlen"]
+
+    @property
+    def _min_seqlen(self):
+        if "min_seqlen" not in self._metadata_cache:
+            # compute & cache
+            self._metadata_cache["min_seqlen"] = _get_sdpa_extreme_seqlen(
+                torch.min,
+                self._offsets.diff() if self._lengths is None else self._lengths,
+            )
+
 
 def same_raggedness(a, b):
     return a._offsets is b._offsets and a._ragged_idx == b._ragged_idx
@@ -251,11 +282,13 @@ def raggedness_matches(nt, size):
 def njt_like(a, values=None, offsets=None, ragged_idx=None):
     if values is None:
         values = a._values
+    metadata_cache = None
     if offsets is None:
         offsets = a._offsets
+        metadata_cache = a._metadata_cache
     if ragged_idx is None:
         ragged_idx = a._ragged_idx
-    return NJT2(values, offsets, ragged_idx)
+    return NJT2(values, offsets, ragged_idx, _metadata_cache=metadata_cache)
 
 def extract_kwargs(arg):
     kwargs = {
@@ -385,6 +418,13 @@ def _(func, input, normalized_shape, weight=None, bias=None, eps=1e-5):
 def _(func, *args, **kwargs):
     return ops.jagged_scaled_dot_product_attention(NJT2, *args, **kwargs)
 
+@register_njt2(torch.unflatten)
+def _(func, input, dim, sizes):
+    if dim < 0:
+        dim = dim + input.dim()
+    assert dim != 0 and dim > input._ragged_idx, "NYI otherwise"
+    return njt_like(input, input._values.unflatten(dim - 1, sizes))
+
 @register_njt2([
     torch.ops.aten.view,
     torch.ops.aten._unsafe_view,
@@ -481,8 +521,8 @@ def _(func, query, key, value, attn_mask, dropout, is_causal):
 
     def check_dtypes_low_precision(params):
         query_dtype = params.query.dtype
-        if not (query_dtype == params.key.dtype() and
-                query_dtype == params.value.dtype() and
+        if not (query_dtype == params.key.dtype and
+                query_dtype == params.value.dtype and
                 query_dtype in {torch.half, torch.bfloat16}):
             return False
         return True
@@ -510,7 +550,7 @@ def _(func, query, key, value, attn_mask, dropout, is_causal):
         value_size_last = params.value.size(-1)
         alignment = minimum_gemm_alignment(params)
         
-        if not (query_size_last == params.key.sym_size(-1) and 
+        if not (query_size_last == params.key.size(-1) and 
                 query_size_last % alignment == 0 and query_size_last > 0 and 
                 value_size_last % alignment == 0 and value_size_last > 0):
             return False
