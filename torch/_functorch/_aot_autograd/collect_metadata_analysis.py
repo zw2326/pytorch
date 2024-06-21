@@ -674,7 +674,7 @@ from a multi-output view call"
             ]
         else:
             static_parameter_input_indices = []
-        if False:
+        if static_parameter_input_indices:
             if (
                 5 in static_parameter_input_indices
                 and 6 in static_parameter_input_indices
