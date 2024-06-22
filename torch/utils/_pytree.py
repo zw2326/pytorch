@@ -24,6 +24,7 @@ import threading
 import types
 import warnings
 from collections import defaultdict, deque, namedtuple, OrderedDict
+from operator import itemgetter
 from typing import (
     Any,
     Callable,
@@ -421,18 +422,52 @@ def _list_unflatten(values: Iterable[Any], context: Context) -> List[Any]:
 
 
 def _dict_flatten(d: Dict[Any, Any]) -> Tuple[List[Any], Context]:
-    return list(d.values()), list(d.keys())
+    sorted_keys = sorted(d)
+    sorted_values = [d[key] for key in sorted_keys]
+    return sorted_values, [sorted_keys, dict.fromkeys(d)]
 
 
 def _dict_flatten_with_keys(
     d: Dict[Any, Any]
 ) -> Tuple[List[Tuple[KeyEntry, Any]], Context]:
     values, context = _dict_flatten(d)
-    return [(MappingKey(k), v) for k, v in zip(context, values)], context
+    sorted_keys, _ = context
+    return [(MappingKey(k), v) for k, v in zip(sorted_keys, values)], context
 
 
 def _dict_unflatten(values: Iterable[Any], context: Context) -> Dict[Any, Any]:
-    return dict(zip(context, values))
+    sorted_keys, original_copy = context
+    d: Dict[Any, Any] = original_copy.copy()
+    d.update(zip(sorted_keys, values))
+    return d
+
+
+def _dict_serialize(context: Context) -> DumpableContext:
+    sorted_keys, original_copy = context
+    json_dict = {
+        "sorted_keys": sorted_keys,
+        # We do not serialize the original copy (a dict) to JSON directly. Because
+        # all keys will be converted to strings when serialized to JSON, we will
+        # lose the original types of the keys (e.g., they might be `int`s).
+        "original_keys": list(original_copy),
+    }
+    return json_dict
+
+
+def _dict_deserialize(dumpable_context: DumpableContext) -> Context:
+    assert isinstance(dumpable_context, dict)
+    assert set(dumpable_context) == {
+        "sorted_keys",
+        "original_keys",
+    }
+
+    sorted_keys = dumpable_context["sorted_keys"]
+    original_keys = dumpable_context["original_keys"]
+    assert isinstance(sorted_keys, list)
+    assert isinstance(original_keys, list)
+    assert len(sorted_keys) == len(original_keys)
+    original_copy = dict.fromkeys(original_keys)
+    return [sorted_keys, original_copy]
 
 
 def _namedtuple_flatten(d: NamedTuple) -> Tuple[List[Any], Context]:
@@ -516,7 +551,8 @@ def _defaultdict_flatten_with_keys(
 ) -> Tuple[List[Tuple[KeyEntry, Any]], Context]:
     values, context = _defaultdict_flatten(d)
     _, dict_context = context
-    return [(MappingKey(k), v) for k, v in zip(dict_context, values)], context
+    sorted_keys, _ = dict_context
+    return [(MappingKey(k), v) for k, v in zip(sorted_keys, values)], context
 
 
 def _defaultdict_unflatten(
@@ -532,7 +568,7 @@ def _defaultdict_serialize(context: Context) -> DumpableContext:
     json_defaultdict = {
         "default_factory_module": default_factory.__module__,
         "default_factory_name": default_factory.__qualname__,
-        "dict_context": dict_context,
+        "dict_context": _dict_serialize(dict_context),
     }
     return json_defaultdict
 
@@ -552,7 +588,7 @@ def _defaultdict_deserialize(dumpable_context: DumpableContext) -> Context:
     module = importlib.import_module(default_factory_module)
     default_factory = getattr(module, default_factory_name)
 
-    dict_context = dumpable_context["dict_context"]
+    dict_context = _dict_deserialize(dumpable_context["dict_context"])
     return [default_factory, dict_context]
 
 
@@ -590,6 +626,8 @@ _private_register_pytree_node(
     _dict_flatten,
     _dict_unflatten,
     serialized_type_name="builtins.dict",
+    to_dumpable_context=_dict_serialize,
+    from_dumpable_context=_dict_deserialize,
     flatten_with_keys_fn=_dict_flatten_with_keys,
 )
 _private_register_pytree_node(
@@ -728,10 +766,12 @@ class TreeSpec:
 
     def entries(self) -> List[Any]:
         if self.type in STANDARD_DICT_TYPES:
+            if self.type is OrderedDict:
+                return self._context  # type: ignore[no-any-return]
             dict_context = (
                 self._context if self.type is not defaultdict else self._context[1]
             )
-            return dict_context  # type: ignore[no-any-return]
+            return dict_context[0]  # type: ignore[no-any-return]
         return list(range(self.num_children))
 
     def entry(self, index: int) -> Any:
@@ -1511,7 +1551,7 @@ def arg_tree_leaves(*args: PyTree, **kwargs: PyTree) -> List[Any]:
     leaves: List[Any] = []
     for a in args:
         leaves.extend(tree_iter(a))
-    for a in kwargs.values():
+    for _, a in sorted(kwargs.items(), key=itemgetter(0)):
         leaves.extend(tree_iter(a))
     return leaves
 
