@@ -1470,7 +1470,7 @@ class WrapperCodeGen(CodeGen):
             """
         )
 
-    def generate_default_grid(self, name: str, grid_args: List[Any]):
+    def generate_default_grid(self, kernel_name: str, grid_args: List[Any]):
         return grid_args
 
     def prepare_triton_kernel_call(self, device_index, call_args):
@@ -1553,6 +1553,7 @@ class WrapperCodeGen(CodeGen):
         raw_args=None,
         grid_fn: str = "grid",
         triton_meta=None,
+        autotune_configs=None,
     ):
         """
         Generates kernel call code.
