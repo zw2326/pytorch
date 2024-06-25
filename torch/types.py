@@ -39,6 +39,8 @@ _layout = torch.layout
 _size = Union[torch.Size, List[_int], Tuple[_int, ...]]
 _dispatchkey = Union[_str, torch._C.DispatchKey]
 
+IntLikeType = Union[_int, torch.SymInt]
+
 # Meta-type for "numeric" things; matches our docs
 Number = Union[_int, _float, _bool]
 
