@@ -503,7 +503,8 @@ class SymInt:
         raise TypeError("type stub not overridden")
 
     def __repr__(self):
-        return str(self.node)
+        # Don't add extra info here - see SymNode.__repr__()
+        return repr(self.node)
 
     def __hash__(self) -> builtins.int:
         if self.node.is_nested_int():
@@ -608,7 +609,8 @@ class SymFloat:
         raise TypeError("type stub not overridden")
 
     def __repr__(self):
-        return self.node.str()
+        # Don't add extra info here - see SymNode.__repr__()
+        return repr(self.node)
 
 
 class SymBool:
@@ -666,7 +668,8 @@ class SymBool:
         raise TypeError("type stub not overridden")
 
     def __repr__(self):
-        return str(self.node)
+        # Don't add extra info here - see SymNode.__repr__()
+        return repr(self.node)
 
     def __hash__(self):
         if self.node.is_constant():
