@@ -197,6 +197,66 @@ from torchgen.model import (
 # For examples, only pyi signatures include return types.
 
 
+inplace_binary_ops = {
+    "iadd",
+    "iand",
+    "ifloordiv",
+    "ilshift",
+    "imatmul",
+    "imod",
+    "imul",
+    "ior",
+    "ipow",
+    "irshift",
+    "isub",
+    "itruediv",
+    "ixor",
+}
+binary_ops = inplace_binary_ops | {
+    "add",
+    "sub",
+    "mul",
+    "div",
+    "pow",
+    "lshift",
+    "rshift",
+    "mod",
+    "truediv",
+    "matmul",
+    "floordiv",
+    "radd",
+    "rsub",
+    "rmul",
+    "rtruediv",
+    "rfloordiv",
+    "rpow",  # reverse arithmetic
+    "and",
+    "or",
+    "xor",
+    "rand",
+    "ror",
+    "rxor",  # logic
+    "iadd",
+    "iand",
+    "idiv",
+    "ilshift",
+    "imul",
+    "ior",
+    "irshift",
+    "isub",
+    "ixor",
+    "ifloordiv",
+    "imod",  # inplace ops
+}
+symmetric_comparison_ops = {"eq", "ne"}
+asymmetric_comparison_ops = {"ge", "gt", "lt", "le"}
+comparison_ops = symmetric_comparison_ops | asymmetric_comparison_ops
+
+unary_ops = {"pos", "neg", "abs", "invert"}
+to_py_type_ops = {"bool", "float", "complex", "long", "index", "int", "nonzero"}
+all_ops = binary_ops | comparison_ops | unary_ops | to_py_type_ops
+
+
 def format_function_signature(
     name: str, arguments: Iterable[str] = (), return_type: str | None = None
 ) -> str:
@@ -208,13 +268,17 @@ def format_function_signature(
     if len(sig) <= 80 or len(arguments) == 0 or tuple(arguments) == ("self",):
         return sig
 
+    arguments = [f"    {arg}," for arg in arguments]
     return "\n".join(
         (
             f"def {name}(",
-            *(f"    {arg}," for arg in arguments),
+            *(
+                arg if len(arg) <= 80 else f"    # fmt: off\n{arg}\n    # fmt: on"
+                for arg in arguments
+            ),
             f"){return_type}: ...",
         )
-    )
+    ).replace("    # fmt: off\n    # fmt: on\n", "")
 
 
 @dataclass(frozen=True)
@@ -299,7 +363,9 @@ class PythonArgument:
                 and self.default.startswith("{")
                 and self.default.endswith("}")
             ):
-                default = "(" + self.default[1:-1] + ")"
+                default = (
+                    "(" + ", ".join(map(str.strip, self.default[1:-1].split(","))) + ")"
+                )
             else:
                 default = {
                     "nullptr": "None",
@@ -310,6 +376,7 @@ class PythonArgument:
                     "MemoryFormat::Contiguous": "contiguous_format",
                     "QScheme::PER_TENSOR_AFFINE": "per_tensor_affine",
                 }.get(self.default, self.default)
+
             return f"{name}: {type_str} = {default}"
         else:
             return f"{name}: {type_str}"
@@ -1032,7 +1099,9 @@ def returns_structseq_pyi(signature: PythonSignature) -> tuple[str, str] | None:
         # does not allow us to override __init__.
         seq_type = f"tuple[{', '.join(python_returns)}]"
         structseq_def_lines = [
-            f"class {structseq_name}({seq_type}):",
+            f"class {structseq_name}(",
+            f"    {seq_type},  # fmt: skip",
+            "):",
         ]
         for name, ret_type in zip(field_names, python_returns):
             structseq_def_lines.extend(
@@ -1043,7 +1112,10 @@ def returns_structseq_pyi(signature: PythonSignature) -> tuple[str, str] | None:
             )
         structseq_def_lines.extend(
             [
-                f"    def __new__(cls, sequence: {seq_type}) -> Self: ...",
+                "    def __new__(",
+                "        cls,",
+                f"        sequence: {seq_type},  # fmt: skip",
+                "    ) -> Self: ...",
                 f"    n_fields: Final[_int] = {len(field_names)}",
                 f"    n_sequeunce_fields: Final[_int] = {len(field_names)}",
                 "    n_unnamed_fields: Final[_int] = 0",
@@ -1054,12 +1126,17 @@ def returns_structseq_pyi(signature: PythonSignature) -> tuple[str, str] | None:
         structseq_def = "\n".join(structseq_def_lines)
         # Example:
         # structseq_def = (
-        #     "class max(tuple[Tensor, Tensor]):\n"
+        #     "class max(\n"
+        #     "    tuple[Tensor, Tensor],  # fmt: skip\n"
+        #     "):\n"
         #     "    @property\n"
         #     "    def values(self) -> Tensor: ...\n"
         #     "    @property\n"
         #     "    def indices(self) -> Tensor: ...\n"
-        #     "    def __new__(cls, sequence: tuple[Tensor, Tensor]) -> Self: ...\n"
+        #     "    def __new__(\n"
+        #     "        cls,\n"
+        #     "        sequence: tuple[Tensor, Tensor],  # fmt: skip\n"
+        #     "    ) -> Self: ...\n"
         #     "    n_fields: Final[_int] = 2",
         #     "    n_sequeunce_fields: Final[_int] = 2",
         #     "    n_unnamed_fields: Final[_int] = 0",
@@ -1070,14 +1147,22 @@ def returns_structseq_pyi(signature: PythonSignature) -> tuple[str, str] | None:
 
 
 def returns_str_pyi(signature: PythonSignature) -> str:
+    name = signature.name
     field_names = structseq_fieldnames(signature.returns.returns)
     if field_names:
-        return f"torch.return_types.{signature.name}"
+        return f"torch.return_types.{name}"
 
     python_returns = [return_type_str_pyi(r.type) for r in signature.returns.returns]
     if len(python_returns) > 1:
         return "tuple[" + ", ".join(python_returns) + "]"
     if len(python_returns) == 1:
+        if (
+            python_returns[0] == "Tensor"
+            and name.startswith("__")
+            and name.endswith("__")
+            and name[2:-2] in inplace_binary_ops
+        ):
+            return "Self"
         return python_returns[0]
     return "None"
 

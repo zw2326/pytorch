@@ -39,10 +39,17 @@ from tools.autograd.gen_python_functions import (
 )
 
 from torchgen.api.python import (
+    all_ops,
+    binary_ops,
+    comparison_ops,
     format_function_signature as defs,
+    inplace_binary_ops,
     PythonSignatureGroup,
     PythonSignatureNativeFunctionPair,
     returns_structseq_pyi,
+    symmetric_comparison_ops,
+    to_py_type_ops,
+    unary_ops,
 )
 from torchgen.gen import parse_native_yaml, parse_tags_yaml
 from torchgen.model import _TorchDispatchModeKey, DispatchKey, Variant
@@ -128,7 +135,7 @@ _leaf_types = (
     "_bool | _int | slice | EllipsisType | Tensor | None"  # not SupportsIndex!
 )
 _index_types = f"SupportsIndex | {_leaf_types} | _NestedSequence[{_leaf_types}]"
-_index_type_def = f"_Index: TypeAlias = {_index_types}"
+_index_type_def = f"_Index: TypeAlias = {_index_types}  # fmt: skip"
 INDICES = "indices: _Index | tuple[_Index, ...]"
 
 blocklist = [
@@ -182,50 +189,6 @@ blocklist = [
     "copy_",
 ]
 
-binary_ops = (
-    "add",
-    "sub",
-    "mul",
-    "div",
-    "pow",
-    "lshift",
-    "rshift",
-    "mod",
-    "truediv",
-    "matmul",
-    "floordiv",
-    "radd",
-    "rsub",
-    "rmul",
-    "rtruediv",
-    "rfloordiv",
-    "rpow",  # reverse arithmetic
-    "and",
-    "or",
-    "xor",
-    "rand",
-    "ror",
-    "rxor",  # logic
-    "iadd",
-    "iand",
-    "idiv",
-    "ilshift",
-    "imul",
-    "ior",
-    "irshift",
-    "isub",
-    "ixor",
-    "ifloordiv",
-    "imod",  # inplace ops
-)
-symmetric_comparison_ops = ("eq", "ne")
-asymmetric_comparison_ops = ("ge", "gt", "lt", "le")
-comparison_ops = symmetric_comparison_ops + asymmetric_comparison_ops
-
-unary_ops = ("neg", "abs", "invert")
-to_py_type_ops = ("bool", "float", "complex", "long", "index", "int", "nonzero")
-all_ops = binary_ops + comparison_ops + unary_ops + to_py_type_ops
-
 
 def sig_for_ops(opname: str) -> list[str]:
     """sig_for_ops(opname : str) -> list[str]
@@ -237,14 +200,15 @@ def sig_for_ops(opname: str) -> list[str]:
     assert opname.endswith("__") and opname.startswith("__"), f"Unexpected op {opname}"
 
     name = opname[2:-2]
-    if name in binary_ops:
+    if name in symmetric_comparison_ops:
+        # unsafe override https://github.com/python/mypy/issues/5704
+        return [
+            f"def {opname}(self, other: Any) -> Tensor: ...  # noqa: PYI032 # type: ignore[override]"
+        ]
+    if name in inplace_binary_ops:
+        return [f"def {opname}(self, other: Any) -> Self: ..."]
+    if name in binary_ops or name in comparison_ops:
         return [f"def {opname}(self, other: Any) -> Tensor: ..."]
-    if name in comparison_ops:
-        sig = f"def {opname}(self, other: Any) -> Tensor: ..."
-        if name in symmetric_comparison_ops:
-            # unsafe override https://github.com/python/mypy/issues/5704
-            sig += "  # type: ignore[override]"
-        return [sig]
     if name in unary_ops:
         return [f"def {opname}(self) -> Tensor: ..."]
     if name in to_py_type_ops:
@@ -651,7 +615,7 @@ def add_docstr_to_hint(docstr: str, hint: str) -> str:
     if "..." in hint:  # function or method
         assert hint.endswith("..."), f"Hint `{hint}` does not end with '...'"
         hint = hint[:-3]  # remove "..."
-        return "\n    ".join([hint, 'r"""'] + docstr.split("\n") + ['"""', "..."])
+        return "\n    ".join((hint.rstrip(), 'r"""', *docstr.split("\n"), '"""'))
     else:  # attribute or property
         return f'{hint}\nr"""{docstr}"""\n'
 
@@ -1533,7 +1497,7 @@ def gen_pyi(
     # Generate type signatures for legacy classes
     # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-    legacy_storage_base_hints = ["class StorageBase(object): ..."]
+    legacy_storage_base_hints = ["class StorageBase: ..."]
 
     legacy_class_hints = []
     for c in (
