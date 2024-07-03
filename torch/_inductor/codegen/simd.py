@@ -31,6 +31,7 @@ import torch._logging
 
 from torch.utils._sympy.functions import FloorDiv, ModularIndexing
 from torch.utils._sympy.symbol import free_symbol_is_type, symbol_is_type, SymT
+
 from ..._dynamo.utils import counters
 from .. import config, ir, scheduler
 from ..codecache import code_hash
@@ -845,23 +846,31 @@ class SIMDKernel(Kernel):
                     log.warning(msg)
 
                     stride_order_list = [
-                        ir.get_stride_order(V.graph.get_buffer(name).layout.stride)
-                        if V.graph.get_buffer(name)
-                        else None
+                        (
+                            ir.get_stride_order(V.graph.get_buffer(name).layout.stride)
+                            if V.graph.get_buffer(name)
+                            else None
+                        )
                         for name in call_args
                     ]
                     size_list = [
-                        V.graph.get_buffer(name).layout.size
-                        if V.graph.get_buffer(name)
-                        else None
+                        (
+                            V.graph.get_buffer(name).layout.size
+                            if V.graph.get_buffer(name)
+                            else None
+                        )
                         for name in call_args
                     ]
                     source_list = [
-                        "GraphInput"
-                        if name in V.graph.graph_inputs
-                        else "IntermediateBuffer"
-                        if name in V.graph.name_to_buffer
-                        else None
+                        (
+                            "GraphInput"
+                            if name in V.graph.graph_inputs
+                            else (
+                                "IntermediateBuffer"
+                                if name in V.graph.name_to_buffer
+                                else None
+                            )
+                        )
                         for name in call_args
                     ]
 
@@ -1449,9 +1458,14 @@ class SIMDScheduling(BaseScheduling):
     def codegen_foreach(self, foreach_node):
         from .triton_foreach import ForeachKernel
 
+        i = 0
         for partitions_with_metadata in ForeachKernel.horizontal_partition(
             foreach_node.get_subkernel_nodes(), self
         ):
+            i += 1
+            if i == 2:
+                print("----------------------------------------")
+                print(len(partitions_with_metadata))
             kernel = ForeachKernel()
             for nodes, tiled_groups, numel, rnumel in partitions_with_metadata:
                 node_schedule = self.generate_node_schedule(nodes, numel, rnumel)
@@ -1475,6 +1489,7 @@ class SIMDScheduling(BaseScheduling):
 
                 with V.set_kernel_handler(subkernel):
                     for node in node_schedule:
+                        # print(f"{node.get_name()}")
                         if node not in (EnableReduction, DisableReduction):
                             node.mark_run()
                 V.graph.removed_buffers |= subkernel.removed_buffers
@@ -1482,8 +1497,14 @@ class SIMDScheduling(BaseScheduling):
 
             src_code = kernel.codegen_kernel()
             kernel_name = self.define_kernel(src_code, [foreach_node], kernel)
+            if i == 2:
+                print(kernel_name)
+                print(kernel.args)
+                # print(kernel.args.python_argdefs())
             self.codegen_comment([foreach_node])
             kernel.call_kernel(V.graph.wrapper_code, kernel_name)
+            if i == 2:
+                print("----------------------------------------------")
 
         self.scheduler.free_buffers()
 

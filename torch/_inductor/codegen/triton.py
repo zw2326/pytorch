@@ -1744,6 +1744,7 @@ class TritonKernel(SIMDKernel):
     def store(
         self, name: str, index: sympy.Expr, value: CSEVariable, mode: StoreMode = None
     ) -> None:
+        print(name)
         var = self.args.output(name)
         original_index = index
         indexing = self.indexing(index, dense_indexing=True, block_ptr=mode is None)

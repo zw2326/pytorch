@@ -418,9 +418,9 @@ def cast_to(dtype, model, inputs):
         model = cast_dtype_args_to_fp64(model)
 
     inputs = tree_map(
-        lambda x: x.to(dtype)
-        if isinstance(x, torch.Tensor) and x.is_floating_point()
-        else x,
+        lambda x: (
+            x.to(dtype) if isinstance(x, torch.Tensor) and x.is_floating_point() else x
+        ),
         inputs,
     )
     return model, inputs
@@ -733,14 +733,15 @@ def aot_graph_input_parser(
         # Resolve symbolic shapes to concrete values
         resolved_shape = []
         dynamic_dims = []
-        for i, dim in enumerate(shape):
-            dim = dim.strip()
-            if "s" in dim:
-                s = get_sym_int(dim)
-                resolved_shape.append(s)
-                dynamic_dims.append(i)
-            else:
-                resolved_shape.append(int(dim))
+        if shape != ("",):
+            for i, dim in enumerate(shape):
+                dim = dim.strip()
+                if "s" in dim:
+                    s = get_sym_int(dim)
+                    resolved_shape.append(s)
+                    dynamic_dims.append(i)
+                else:
+                    resolved_shape.append(int(dim))
 
         constructor = torch.randn if dtype.is_floating_point else torch.zeros
         out = constructor(resolved_shape, dtype=dtype, device=device)  # type: ignore[call-arg]

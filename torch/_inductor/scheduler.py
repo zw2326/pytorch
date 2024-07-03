@@ -828,6 +828,7 @@ class SchedulerNode(BaseSchedulerNode):
         self.codegen(index_vars)
 
     def mark_run(self) -> None:
+        # print(f"allocating {self.get_name()}")
         self.allocate()
 
     def ranges_from_index_vars(
@@ -1091,15 +1092,27 @@ class ForeachKernelSchedulerNode(FusedSchedulerNode):
     def get_producer_subnode_for(
         self, consumer: BaseSchedulerNode
     ) -> Optional[BaseSchedulerNode]:
+        producers = []
         for rd in consumer.read_writes.reads:
             if rd.name in self.name_to_node:
-                return self.name_to_node[rd.name]
+                producers.append(self.name_to_node[rd.name])
 
-        return None
+        # Don't permit fusion if there are multiple subnodes
+        # that this consumer reads from
+        if len(producers) == 1:
+            return producers[0]
+        else:
+            return None
 
     @classmethod
     def can_fuse(cls, producer: BaseSchedulerNode, consumer: BaseSchedulerNode) -> bool:
         why = WhyNoFuse(producer, consumer)
+        if producer.get_name() == "buf486_buf526":
+            breakpoint()
+
+        if consumer.get_name() == "buf486_buf526":
+            breakpoint()
+
         if producer.is_foreach() and consumer.is_foreach():
             producer = typing.cast(ForeachKernelSchedulerNode, producer)
             consumer = typing.cast(ForeachKernelSchedulerNode, consumer)
@@ -1197,15 +1210,15 @@ class ForeachKernelSchedulerNode(FusedSchedulerNode):
         prev_node_1: Optional[BaseSchedulerNode] = None,
         prev_node_2: Optional[BaseSchedulerNode] = None,
     ) -> None:
-        self.read_to_node = {}
-        self.name_to_node = {}
+        self.read_to_node = collections.defaultdict(list)
+        self.name_to_node = collections.defaultdict(list)
 
         if prev_node_1 is None or prev_node_2 is None:
             super().__init__(scheduler, nodes)
 
             for node in nodes:
                 for read in node.read_writes.reads:
-                    self.read_to_node[read.name] = node
+                    self.read_to_node[read.name].append(node)
 
                 for name in node.get_names():
                     self.name_to_node[name] = node
@@ -1783,7 +1796,6 @@ class Scheduler:
                     updated_nodes.append(node)
                 else:
                     # dead code
-                    log.debug("removed dead node: %s", node.get_name())
                     V.graph.removed_buffers.add(node.get_name())
 
             again = len(self.nodes) > len(updated_nodes)
@@ -1846,6 +1858,14 @@ class Scheduler:
             )
             self.fuse_nodes_once()
             new_len = len(self.nodes)
+
+            print(f"{i + 1}----------------------")
+            for node in self.nodes:
+                for read in node.read_writes.reads:
+                    if read.name == "buf394":
+                        print(node)
+            print("----------------------")
+
             fusion_log.debug(
                 "completed fusion round (%d/10): fused %d nodes into %d nodes\n",
                 i + 1,
@@ -2087,6 +2107,11 @@ class Scheduler:
         for node1, node2 in self.get_possible_fusions():
             node1 = self.name_to_fused_node[node1.get_first_name()]
             node2 = self.name_to_fused_node[node2.get_first_name()]
+            if node1.get_name() == "buf486_buf526":
+                breakpoint()
+            if node2.get_name() == "buf486_buf526":
+                breakpoint()
+
             if self.can_fuse(node1, node2) and not self.will_fusion_create_cycle(
                 node1, node2
             ):

@@ -1147,6 +1147,9 @@ class KernelArgs:
     @staticmethod
     def _lookup(prefix, odict, name):
         assert isinstance(name, (str, sympy.Symbol))
+        if name == "buf394":
+            breakpoint()
+            print("LOOKED UP IN KERNEL ARGS")
         if name not in odict:
             odict[name] = f"{prefix}{len(odict)}"
         return odict[name]
@@ -1842,6 +1845,7 @@ class Kernel(CodeGen):
 
             @staticmethod
             def load(name: str, index: sympy.Expr) -> CSEVariable:
+                # print(name)
                 if name in self.cse.invalidated_stores:
                     # A load from an invalidated store requires us to
                     # keep the actual buffer around

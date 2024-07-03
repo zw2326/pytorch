@@ -1404,6 +1404,7 @@ class WrapperCodeGen(CodeGen):
             device_index, call_args = self.prepare_triton_kernel_call(
                 device_index, call_args
             )
+            print(call_args)
             call_args_str = ", ".join(call_args)
             stream_name = self.write_get_raw_stream(device_index, V.graph)
             if triton:

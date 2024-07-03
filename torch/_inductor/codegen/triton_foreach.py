@@ -148,6 +148,7 @@ class ForeachKernel(Kernel):
         self.blocking_2d |= groups[1] != 1 and len(groups) == 3
         metrics.generated_kernel_count -= 1
         sub_kernel.args = self.args
+        # print(sub_kernel.args)
         sub_kernel.iter_vars_count = self.iter_vars_count
         sub_kernel.cse.iter_buffer_ids = self.cse.iter_buffer_ids
         self.sub_kernels.append(sub_kernel)
@@ -181,9 +182,11 @@ class ForeachKernel(Kernel):
     def grid(self):
         return (
             self.x_block_count,
-            ceildiv(int(self.sub_kernels[0].numels[0]), self.block_size_2d)
-            if self.blocking_2d
-            else 1,
+            (
+                ceildiv(int(self.sub_kernels[0].numels[0]), self.block_size_2d)
+                if self.blocking_2d
+                else 1
+            ),
             1,
         )
 
