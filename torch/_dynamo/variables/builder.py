@@ -1944,7 +1944,15 @@ def wrap_fx_proxy_cls(
             )
 
         options.update(specialized_props)
-        return target_cls(proxy, **options)
+        vt = target_cls(proxy, **options)
+        if (
+            "source" in options
+            and options["source"]
+            and initial_example_value is not None
+            and initial_example_value not in tx.output.side_effects
+        ):
+            vt = tx.output.side_effects.track_object_existing(initial_example_value, vt)
+        return vt
     elif (
         hasattr(proxy.node.target, "__name__")
         and proxy.node.target.__name__ == "set_state"
