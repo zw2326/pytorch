@@ -293,6 +293,7 @@ __all__ = [
     "tensor_split",
     "transpose",
     "transpose_copy",
+    "unbind_copy",
     "unfold",
     "unfold_copy",
     "unsqueeze",
@@ -6326,11 +6327,10 @@ permute_copy = _make_copy_from_view(permute)
 squeeze_copy = _make_copy_from_view(squeeze)
 t_copy = _make_copy_from_view(t)
 transpose_copy = _make_copy_from_view(transpose)
+unbind_copy = _make_copy_from_view(unbind)
 unfold_copy = _make_copy_from_view(unfold)
 unsqueeze_copy = _make_copy_from_view(unsqueeze)
 view_copy = _make_copy_from_view(view)
-
-# TODO: unbind_copy
 
 
 # xref: isStorage in torch/csrc/DynamicTypes.cpp
