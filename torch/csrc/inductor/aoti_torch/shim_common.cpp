@@ -3,6 +3,7 @@
 #include <c10/core/Layout.h>
 #include <c10/core/ScalarType.h>
 #include <c10/util/Exception.h>
+#include <nlohmann/json.hpp>
 #include <torch/csrc/inductor/aoti_torch/c/shim.h>
 #include <torch/csrc/inductor/aoti_torch/mkldnn_tensor.h>
 #include <torch/csrc/inductor/aoti_torch/proxy_executor.h>
@@ -44,6 +45,7 @@
 #endif
 
 using namespace torch::aot_inductor;
+using json_n = nlohmann::json;
 
 namespace {
 static c10::Device c10_device(int32_t device_type, int32_t device_index) {
