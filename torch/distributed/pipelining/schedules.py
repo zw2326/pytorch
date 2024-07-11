@@ -38,6 +38,8 @@ class _ComputationType(Enum):
     WEIGHT = 3
     UNSHARD = 4
     RESHARD = 5
+    SEND = 6
+    RECV = 7
 
     def __str__(self):
         str_map = {
@@ -46,6 +48,8 @@ class _ComputationType(Enum):
             _ComputationType.WEIGHT: "W",
             _ComputationType.UNSHARD: "UNSHARD",
             _ComputationType.RESHARD: "RESHARD",
+            _ComputationType.SEND: "SEND",
+            _ComputationType.RECV: "RECV",
         }
         return str_map[self]
 
@@ -61,6 +65,10 @@ class _ComputationType(Enum):
             return _ComputationType.UNSHARD
         elif action == "RESHARD":
             return _ComputationType.RESHARD
+        elif action == "SEND":
+            return _ComputationType.SEND
+        elif action == "RECV":
+            return _ComputationType.RECV
         else:
             raise RuntimeError(f"Invalid computation type {action}")
 
@@ -70,38 +78,50 @@ B = _ComputationType.BACKWARD
 W = _ComputationType.WEIGHT
 UNSHARD = _ComputationType.UNSHARD
 RESHARD = _ComputationType.RESHARD
+SEND = _ComputationType.SEND
+RECV = _ComputationType.RECV
 
-_action_regex = re.compile(r"(\d+)([F,B,W]|UNSHARD|RESHARD)(\d*)")
+_action_regex = re.compile(r"(\d+)([F,B,W]{0,1})(\d*)(UNSHARD|RESHARD|SEND|RECV){0,1}")
 
 
 class _Action(NamedTuple):
     stage_index: int
-    computation_type: _ComputationType
+    computation_type: Optional[_ComputationType] = None
     microbatch_index: Optional[int] = None
+    comm_type: Optional[_ComputationType] = None
 
     def __repr__(self):
+        repr = str(self.stage_index)
+        if self.computation_type is not None:
+            repr += str(self.computation_type)
         if self.microbatch_index is not None:
-            return f"{self.stage_index}{self.computation_type}{self.microbatch_index}"
-        return f"{self.stage_index}{self.computation_type}"
+            repr += str(self.microbatch_index)
+        if self.comm_type is not None:
+            repr += str(self.comm_type)
+        return repr
 
     @staticmethod
     def from_str(str):
         """
         Reverse of __repr__
 
-        String should be formatted as [stage][action type][microbatch] e.g. `2F0`
+        String should be formatted as [stage][(action type)][(microbatch)][(comm type)]
+            e.g. `2F0`, `1UNSHARD`, `3F1SEND`
         """
         if match := _action_regex.match(str):
-            stage_index, computation_type, microbatch_index = match.groups()
+            stage_index, computation_type, microbatch_index, comm_type = match.groups()
             return _Action(
                 int(stage_index),
-                _ComputationType.from_str(computation_type),
+                _ComputationType.from_str(computation_type)
+                if computation_type
+                else None,
                 int(microbatch_index) if len(microbatch_index) else None,
+                _ComputationType.from_str(comm_type) if comm_type else None,
             )
         elif str == "" or str.isspace():
             return None
         raise RuntimeError(
-            f"Invalid action string: {str}, should be formatted as [stage][action type][microbatch] e.g. 2F0"
+            f"Invalid action string: {str}, should be formatted as [stage][(action type)][(microbatch)][(comm type)] e.g. 2F0"
         )
 
 
@@ -194,8 +214,8 @@ def _validate_pipeline_order(
             computation_type = action.computation_type
             mb_index = action.microbatch_index
             assert (
-                mb_index is not None
-            ), "All currently supported action types require valid microbatch_index"
+                mb_index is not None and computation_type is not None
+            ), "All currently supported action types require valid microbatch_index and computation_type"
             if mb_index >= num_microbatches:
                 error_msg.append(f"Microbatch index {mb_index} out of range")
 
@@ -812,11 +832,11 @@ def _add_unshard_reshard(
 
     def _unshard(stage_index: int):
         active_stages.add(stage_index)
-        unshard_actions.append(_Action(stage_index, UNSHARD))
+        unshard_actions.append(_Action(stage_index, None, None, UNSHARD))
 
     def _reshard(stage_index: int):
         active_stages.remove(stage_index)
-        unshard_actions.append(_Action(stage_index, RESHARD))
+        unshard_actions.append(_Action(stage_index, None, None, RESHARD))
 
     for i, action in enumerate(compute_actions):
         if action is None:
@@ -844,6 +864,85 @@ def _add_unshard_reshard(
         unshard_actions.append(action)
 
     return unshard_actions
+
+
+def _add_send_recv(
+    compute_actions: Dict[int, List[Optional[_Action]]],
+    stage_to_rank: Callable[[int], int],
+    num_stages: int,
+) -> Dict[int, List[_Action]]:
+    comm_actions: Dict[int, List[_Action]] = {rank: [] for rank in compute_actions}
+
+    def _has_comms(action: _Action) -> bool:
+        if action.computation_type == F:
+            return action.stage_index != num_stages - 1
+        elif action.computation_type == B:
+            return action.stage_index != 0
+        return False
+
+    def _get_comms(action: _Action) -> Tuple[_Action, _Action]:
+        assert _has_comms(action), f"{action} is not a valid comm action"
+        stage_idx = action.stage_index
+        ctype = action.computation_type
+        mb_idx = action.microbatch_index
+        send = _Action(stage_idx, ctype, mb_idx, SEND)
+        recv_stage_idx = stage_idx + 1 if ctype == F else stage_idx - 1
+        recv = _Action(recv_stage_idx, ctype, mb_idx, RECV)
+        return send, recv
+
+    def _ready_to_schedule(
+        action: Optional[_Action], prev_actions: List[_Action]
+    ) -> bool:
+        """We don't put our own recv ops in the schedule, we let a sender on another rank put our recv ops in place.
+        This helps ensure a sane (non-hanging) ordering of sends and recvs.
+        But it also means we might not be able to schedule our next compute action yet.
+        """
+        if action is None:
+            return True
+        elif action.computation_type == F and not action.stage_index == 0:
+            expected_recv = _Action(
+                action.stage_index,
+                action.computation_type,
+                action.microbatch_index,
+                RECV,
+            )
+            return expected_recv in prev_actions
+        elif action.computation_type == B and not action.stage_index == num_stages - 1:
+            expected_recv = _Action(
+                action.stage_index,
+                action.computation_type,
+                action.microbatch_index,
+                RECV,
+            )
+            return expected_recv in prev_actions
+        else:
+            return True
+
+    while compute_actions:
+        progress = False
+        # go in order of ranks even if dict keys aren't ordered
+        for rank in range(len(compute_actions)):
+            assert len(compute_actions[rank]) > 0
+            action = compute_actions[rank][0]
+
+            if not _ready_to_schedule(action, comm_actions[rank]):
+                continue
+
+            if action is not None:
+                comm_actions[rank].append(action)
+                if _has_comms(action):
+                    send, recv = _get_comms(action)
+                    # TODO we can avoid send/recv if the 2 stages are on the same rank.
+                    # should we avoid that in the runtime or here?
+                    comm_actions[rank].append(send)
+                    comm_actions[stage_to_rank(recv.stage_index)].append(recv)
+
+            compute_actions[rank].pop(0)
+            if len(compute_actions[rank]) == 0:
+                del compute_actions[rank]
+            progress = True
+        assert progress, "Malformed compute schedule, can't schedule sends/recvs"
+    return comm_actions
 
 
 class PipelineScheduleMulti(_PipelineSchedule):

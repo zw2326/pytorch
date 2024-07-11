@@ -11,12 +11,15 @@ from torch.distributed.pipelining import (
 )
 from torch.distributed.pipelining.schedules import (
     _Action,
+    _add_send_recv,
     _add_unshard_reshard,
     _format_pipeline_order,
     _validate_pipeline_order,
     B,
     F,
+    RECV,
     RESHARD,
+    SEND,
     UNSHARD,
     W,
 )
@@ -134,8 +137,10 @@ class TestScheduleLowering(TestCase):
             ("1F0", _Action(1, F, 0)),
             ("2B1", _Action(2, B, 1)),
             ("0W3", _Action(0, W, 3)),
-            ("1UNSHARD", _Action(1, UNSHARD)),
-            ("3RESHARD", _Action(3, RESHARD)),
+            ("1UNSHARD", _Action(1, None, None, UNSHARD)),
+            ("3RESHARD", _Action(3, None, None, RESHARD)),
+            ("2B2SEND", _Action(2, B, 2, SEND)),
+            ("1F1RECV", _Action(1, F, 1, RECV)),
         ],
     )
     def test_action_parse(self, action_str_and_ref):
@@ -172,6 +177,70 @@ class TestScheduleLowering(TestCase):
                     f"\nWhole Schedule: {comms_sch}"
                 ),
             )
+
+    @parametrize(
+        "test_info",
+        [
+            {
+                "compute": {
+                    0: ["0F0", "0F1", "   ", "0B0", "   ", "0B1"],
+                    1: ["   ", "1F0", "1B0", "1F1", "1B1", "   "],
+                },
+                "comms": {
+                    0: [
+                        "0F0",
+                        "0F0SEND",
+                        "0F1",
+                        "0F1SEND",
+                        "0B0RECV",
+                        "0B0",
+                        "0B1RECV",
+                        "0B1",
+                    ],
+                    1: [
+                        "1F0RECV",
+                        "1F1RECV",
+                        "1F0",
+                        "1B0",
+                        "1B0SEND",
+                        "1F1",
+                        "1B1",
+                        "1B1SEND",
+                    ],
+                },
+                "stage_to_rank": lambda stage_idx: stage_idx,
+                "num_stages": 2,
+            },
+        ],
+    )
+    def test_send_recv(self, test_info):
+        """Tests the lowering pass that adds send/recv ops to a compute-only schedule."""
+        compute_sch = {
+            rank: self._parse_actions(test_info["compute"][rank])
+            for rank in test_info["compute"]
+        }
+        expected_comms_sch = {
+            rank: self._parse_actions(test_info["comms"][rank])
+            for rank in test_info["comms"]
+        }
+
+        comms_sch = _add_send_recv(
+            compute_sch, test_info["stage_to_rank"], test_info["num_stages"]
+        )
+        for rank in expected_comms_sch:
+            for i, (expected, actual) in enumerate(
+                zip(expected_comms_sch[rank], comms_sch[rank])
+            ):
+                self.assertEqual(
+                    expected,
+                    actual,
+                    (
+                        f"Mismatch on rank {rank} at position {i}."
+                        f"\nExpected: {expected_comms_sch[rank]}"
+                        f"\nActual:   {comms_sch[rank]}"
+                    ),
+                )
+            self.assertEqual(len(comms_sch[rank]), len(expected_comms_sch[rank]))
 
 
 instantiate_parametrized_tests(TestScheduleLowering)
