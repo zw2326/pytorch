@@ -94,7 +94,9 @@ import torch.fx.experimental.symbolic_shapes
 import torch.utils._pytree as pytree
 from torch import fx
 from torch._dispatch.python import enable_python_dispatcher
+from torch._dynamo.device_interface import get_interface_for_device
 from torch._guards import TracingContext
+from torch._inductor.utils import GPU_TYPE
 from torch._subclasses.meta_utils import is_sparse_compressed
 from torch._utils_internal import log_compilation_event
 
@@ -911,15 +913,22 @@ def preserve_rng_state():
     with disable_current_modes(), disable_functorch():
         rng_state = torch.clone(torch.random.get_rng_state())
         skip_frame_if_in_functorch_mode(rng_state)
-        if torch.cuda.is_available():
-            cuda_rng_state = torch.clone(torch.cuda.get_rng_state())
+        gpu_rng_state = None
+        device_interface = get_interface_for_device(GPU_TYPE)
+        if device_interface.is_available():
+            assert (
+                gpu_rng_state is None
+            ), "There should be only one available GPU device"
+            gpu_rng_state = torch.clone(device_interface.get_rng_state())
+
     try:
         yield
     finally:
         with torch.utils._python_dispatch._disable_current_modes():
             torch.random.set_rng_state(rng_state)
-            if torch.cuda.is_available():
-                torch.cuda.set_rng_state(cuda_rng_state)  # type: ignore[possibly-undefined]
+            device_interface = get_interface_for_device(GPU_TYPE)
+            if device_interface.is_available():
+                device_interface.set_rng_state(gpu_rng_state)  # type: ignore[possibly-undefined, arg-type]
 
 
 def is_jit_model(model0):

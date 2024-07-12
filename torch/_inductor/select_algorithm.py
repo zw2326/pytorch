@@ -25,8 +25,10 @@ from filelock import FileLock
 
 import torch
 import torch._inductor.async_compile  # noqa: F401 required to warm up AsyncCompile pools
+from torch._dynamo.device_interface import get_interface_for_device
 from torch._dynamo.testing import rand_strided
 from torch._dynamo.utils import counters, identity, preserve_rng_state
+from torch.testing._internal.inductor_utils import GPU_TYPE
 
 from . import config, ir
 from .autotune_process import TensorMeta, TritonBenchmarkRequest
@@ -1418,8 +1420,11 @@ class AlgorithmSelectorCache(PersistentCache):
                 result = choice.benchmark(*example_inputs, out=out)
             if VERIFY and expected is not None:
                 torch.testing.assert_close(out_extern, expected, **VERIFY)
-            if torch.cuda.is_available():
-                torch.cuda.synchronize()  # shake out any CUDA errors
+
+            device_interface = get_interface_for_device(GPU_TYPE)
+            if device_interface.is_available():
+                device_interface.synchronize()  # shake out any CUDA errors
+
             return result
 
         def benchmark_in_current_process(choices):

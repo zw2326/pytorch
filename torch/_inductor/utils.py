@@ -46,6 +46,20 @@ from unittest import mock
 import sympy
 
 import torch
+
+GPU_TYPES = ["cuda", "xpu"]
+
+
+def _get_gpu_type():
+    avail_gpus = [x for x in GPU_TYPES if getattr(torch, x).is_available()]
+    assert len(avail_gpus) <= 1
+    gpu_type = "cuda" if len(avail_gpus) == 0 else avail_gpus.pop()
+    return gpu_type
+
+
+GPU_TYPE = _get_gpu_type()
+
+import torch.utils._pytree as pytree
 from torch._dynamo.device_interface import get_interface_for_device
 from torch._dynamo.utils import detect_fake_mode
 from torch.autograd import DeviceType
@@ -68,6 +82,7 @@ log = logging.getLogger(__name__)
 
 _T = TypeVar("_T")
 VarRanges = Dict[sympy.Expr, sympy.Expr]
+
 
 GPU_ALIGN_BYTES = 16
 
@@ -977,6 +992,9 @@ class DeferredLineBase:
 
 @functools.lru_cache(None)
 def is_big_gpu(index) -> bool:
+    if torch.xpu.is_available():
+        return True
+
     min_sms = 68  # 3080
     avail_sms = torch.cuda.get_device_properties(index).multi_processor_count
     if avail_sms < min_sms:
@@ -994,10 +1012,10 @@ def use_max_autotune() -> bool:
     )
 
 
-def _use_template_for_cuda(layout, allowed_layout_dtypes: List[torch.dtype]) -> bool:
+def _use_template_for_gpu(layout, allowed_layout_dtypes: List[torch.dtype]) -> bool:
     return (
         use_max_autotune()
-        and layout.device.type == "cuda"
+        and is_gpu(layout.device.type)
         and layout.dtype in allowed_layout_dtypes
         and is_big_gpu(layout.device.index or 0)
     )
@@ -1016,7 +1034,7 @@ def use_triton_template(layout, *, enable_int32=False):
     if enable_int32:
         layout_dtypes = [torch.float16, torch.bfloat16, torch.float32, torch.int32]
     return (
-        _use_template_for_cuda(layout, layout_dtypes)
+        _use_template_for_gpu(layout, layout_dtypes)
         and _use_autotune_backend("TRITON")
         and has_backend_feature(layout.device, BackendFeature.TRITON_TEMPLATES)
     )
@@ -1035,7 +1053,7 @@ def use_cutlass_template(layout, m, n, k):
         return False
 
     layout_dtypes = [torch.float16, torch.bfloat16, torch.float32, torch.int32]
-    res = _use_template_for_cuda(layout, layout_dtypes) and _use_autotune_backend(
+    res = _use_template_for_gpu(layout, layout_dtypes) and _use_autotune_backend(
         "CUTLASS"
     )
 
