@@ -391,9 +391,6 @@ static bool THPVariable_tryResurrect(THPVariable* self) {
 // can't assume that some other code has taken care of it.
 // NB: this will overreport _Py_RefTotal but based on inspection of object.c
 // there is no way to avoid this
-#ifdef Py_TRACE_REFS
-  _Py_AddToAllObjects(reinterpret_cast<PyObject*>(self), 1);
-#endif
   Py_INCREF(self);
 
   // Flip THPVariable to be non-owning
