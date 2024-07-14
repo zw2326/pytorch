@@ -57,6 +57,8 @@ _side_effectful_functions: Set[Callable] = {
     _ops.profiler._record_function_exit,
     _ops.inductor.accumulate_grad_.default,
 } | _side_effectful_need_to_be_preserved_pre_dispatch
+if hasattr(_ops, "_c10d_functional"):
+    _side_effectful_functions.add(_ops._c10d_functional.wait_tensor.default)
 if hasattr(_ops.inductor, "resize_storage_bytes_"):
     _side_effectful_functions.add(_ops.inductor.resize_storage_bytes_.default)
 
@@ -650,7 +652,11 @@ class Node(_NodeBase):
 
         # Check if an impure function.
         if self.op == "call_function":
-            return self.target in _side_effectful_functions
+            if self.target in _side_effectful_functions:
+                return True
+            if isinstance(self.target, torch._ops.OpOverload) and self.target._schema.is_mutable:
+                return True
+            return False
 
         # Check if an impure module.
         if self.op == "call_module":
