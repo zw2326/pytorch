@@ -391,7 +391,10 @@ static bool THPVariable_tryResurrect(THPVariable* self) {
 // can't assume that some other code has taken care of it.
 // NB: this will overreport _Py_RefTotal but based on inspection of object.c
 // there is no way to avoid this
-  Py_INCREF(self);
+
+  // When resurrecting, we MUST use _Py_NewReference and not Py_INCREF to
+  // ensure the PyObject is in a valid state
+  _Py_NewReference((PyObject*)self);
 
   // Flip THPVariable to be non-owning
   // (near use-after-free miss here: fresh MaybeOwned is created breaking
