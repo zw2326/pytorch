@@ -934,6 +934,7 @@ def _legacy_save(obj, f, pickle_module, pickle_protocol) -> None:
     class PyTorchLegacyPicker(pickle_module.Pickler):
         def persistent_id(self, obj):
             return persistent_id(obj)
+
     pickler = PyTorchLegacyPicker(f, protocol=pickle_protocol)
     pickler.dump(obj)
 

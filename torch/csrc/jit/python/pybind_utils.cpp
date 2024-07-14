@@ -32,7 +32,7 @@ ToIValueAllowNumbersAsTensors::~ToIValueAllowNumbersAsTensors() {
 // C++->Python. We need this because otherwise we may get the old Python object
 // if C++ creates a new object at the memory location of the deleted object.
 void clear_registered_instances(void* ptr) {
-  py::detail::with_instance_map(ptr, [&](py::detail::instance_map &instances) {
+  py::detail::with_instance_map(ptr, [&](py::detail::instance_map& instances) {
     auto range = instances.equal_range(ptr);
     for (auto it = range.first; it != range.second; ++it) {
       auto vh = it->second->get_value_and_holder();
