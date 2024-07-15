@@ -15,7 +15,9 @@ class LazyBenchmark:
 
     @cached_property
     def value(self) -> float:
-        return self.initialize()
+        value = self.initialize()
+        del self.initialize
+        return value
     
     __float__ = lambda self: self.value
     __format__ = lambda self, format_spec: format(self.value, format_spec)
