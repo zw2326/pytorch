@@ -14,6 +14,7 @@
 #include <ATen/ops/transpose.h>
 #endif
 #include <ATen/mps/MPSProfiler.h>
+#include <ATen/native/mps/MPSGraphSequoiaOps.h>
 #include <ATen/native/mps/OperationUtils.h>
 #include <fmt/format.h>
 
@@ -738,12 +739,12 @@ Tensor _convert_weight_to_int4pack_mps(const Tensor& in, int64_t innerKTiles) {
 
   if (!is_macOS_15_0_or_newer) {
     MPSStream* mpsStream = getCurrentMPSStream();
-  std::array<uint32_t, 4> sizes = {static_cast<uint32_t>(N), static_cast<uint32_t>(Kdiv2 / 4), 0, 0};
+    std::array<uint32_t, 4> sizes = {static_cast<uint32_t>(N), static_cast<uint32_t>(Kdiv2 / 4), 0, 0};
     dispatch_sync_with_rethrow(mpsStream->queue(), ^() {
       @autoreleasepool {
 #if _CAPTURE_KERNEL
         if (getMPSProfiler().isCaptureEnabled()) {
-        getMPSProfiler().startCapture(fmt::format("weight_to_int4pack_{}x{}", N, Kdiv2), mpsStream);
+          getMPSProfiler().startCapture(fmt::format("weight_to_int4pack_{}x{}", N, Kdiv2), mpsStream);
         }
 #endif
         id<MTLComputeCommandEncoder> computeEncoder = mpsStream->commandEncoder();
