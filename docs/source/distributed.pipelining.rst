@@ -20,7 +20,7 @@ Pipeline parallelism can be an effective technique for:
 
 * large-scale training
 * bandwidth-limited clusters
-* large model inference.
+* large model inference
 
 The above scenarios share a commonality that the computation per device cannot
 hide the communication of conventional parallelism, for example, the weight
@@ -62,8 +62,8 @@ Overall, the ``pipelining`` package provides the following features:
   application on the Llama model.
 
 
-Step 1: build ``PipelineStage`` for execution
-*********************************************
+Step 1: build ``PipelineStage``
+*******************************
 
 Before we can use a ``PipelineSchedule``, we need to create ``PipelineStage``
 objects that wrap the part of the model running in that stage.  The
@@ -261,11 +261,12 @@ Let us see how the ``pipeline`` API works:
 
   from torch.distributed.pipelining import pipeline, SplitPoint
 
+  # An example micro-batch input
   x = torch.LongTensor([1, 2, 4, 5])
+
   pipe = pipeline(
       module=mod,
-      num_chunks=1,
-      example_args=(x,),
+      mb_args=(x,),
       split_spec={
           "layers.1": SplitPoint.BEGINNING,
       }
@@ -306,7 +307,7 @@ If we ``print(pipe)``, we can see::
 
 
 The "model partitions" are represented by submodules (``submod_0``,
-``submod_1``), each of which is reconstructed with original model operations
+``submod_1``), each of which is reconstructed with original model operations, weights
 and hierarchies.  In addition, a "root-level" ``forward`` function is
 reconstructed to capture the data flow between those partitions. Such data flow
 will be replayed by the pipeline runtime later, in a distributed fashion.
@@ -317,11 +318,28 @@ The ``Pipe`` object provides a method for retrieving the "model partitions":
 
   stage_mod : nn.Module = pipe.get_stage_module(stage_idx)
 
-You can also create a distributed stage runtime on a device using ``Pipe``:
+The returned ``stage_mod`` is a ``nn.Module``, with which you can create an
+optimizer, save or load checkpoints, or apply other parallelisms.
+
+``Pipe`` also allows you to create a distributed stage runtime on a device given
+a ``ProcessGroup``:
 
 .. code-block:: python
 
   stage = pipe.build_stage(stage_idx, device, group)
+
+Alternatively, if you would like to build the stage runtime later after some
+modification to the ``stage_mod``, you can use a functional version of the
+``build_stage`` API. For example:
+
+.. code-block:: python
+
+  from torch.distributed.pipelining import build_stage
+  from torch.nn.parallel import DistributedDataParallel
+
+  dp_mod = DistributedDataParallel(stage_mod)
+  info = pipe.info()
+  stage = build_stage(dp_mod, stage_idx, info, device, group)
 
 .. note::
   The ``pipeline`` frontend uses a tracer (``torch.export``) to capture your
@@ -396,7 +414,18 @@ You can implement your own pipeline schedule by extending one of the following t
 ``PipelineScheduleMulti`` is for schedules that assigns multiple stages per rank.
 
 For example, ``ScheduleGPipe`` and ``Schedule1F1B`` are subclasses of ``PipelineScheduleSingle``.
-Whereas, ``ScheduleInterleaved1F1B`` and ``ScheduleLoopedBFS`` are subclasses of ``PipelineScheduleMulti``.
+Whereas, ``ScheduleFlexibleInterleaved1F1B``, ``ScheduleInterleaved1F1B`` and ``ScheduleLoopedBFS``
+are subclasses of ``PipelineScheduleMulti``.
+
+
+Logging
+*******
+
+You can turn on additional logging using the `TORCH_LOGS` environment variable from [`torch._logging`](https://pytorch.org/docs/main/logging.html#module-torch._logging):
+
+* `TORCH_LOGS=+pp` will display `logging.DEBUG` messages and all levels above it.
+* `TORCH_LOGS=pp` will display `logging.INFO` messages and above.
+* `TORCH_LOGS=-pp` will display `logging.WARNING` messages and above.
 
 
 API Reference
@@ -453,6 +482,8 @@ Pipeline Schedules
 .. autoclass:: ScheduleGPipe
 
 .. autoclass:: Schedule1F1B
+
+.. autoclass:: ScheduleFlexibleInterleaved1F1B
 
 .. autoclass:: ScheduleInterleaved1F1B
 

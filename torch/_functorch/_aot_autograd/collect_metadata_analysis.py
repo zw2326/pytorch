@@ -76,8 +76,8 @@ def coerce_tangent(x):
     #     with a Replicate/Shard placement, we have no way to convert the tangent "back" to a _Partial placement.
     #     This method lets us avoid the problem entirely by allowing subclasses to ensure that we can never
     #     have a tangent with "problematic" metadata, that we cannot convert to.
-    # (1) __coerce_same_metadata_as_tangent__(self, target)
-    #     Given a subclass, and a target subclass with differing metadata,
+    # (1) __coerce_same_metadata_as_tangent__(self, metadata)
+    #     Given a subclass, and a target differing metadata,
     #     convert self to have the same metadata as the target.
     #     With DTensor being the main example, we can use this to convert a DTensor with a Replicate()
     #     placement into one with a Shard() placement, in the case that we "guessed wrong",
@@ -86,7 +86,7 @@ def coerce_tangent(x):
     if is_traceable_wrapper_subclass(out) and hasattr(
         out, "__coerce_tangent_metadata__"
     ):
-        out = out.__coerce_tangent_metadata__()
+        out = out.__coerce_tangent_metadata__()  # type: ignore[attr-defined]
     # It's possible to have a subclass that advertises as contiguous,
     # but has noncontiguous inner tensors.
     # Force these to be conntiguous too
@@ -666,7 +666,10 @@ from a multi-output view call"
         )
         user_outs = pytree.tree_map(from_fun, f_output_tangents)
 
-        if torch._dynamo.config.inline_inbuilt_nn_modules:
+        if (
+            torch._dynamo.config.inline_inbuilt_nn_modules
+            or torch._dynamo.compiled_autograd.in_compiled_autograd_region
+        ):
             static_parameter_input_indices = [
                 i
                 for i, arg in enumerate(flat_args)
