@@ -1648,7 +1648,7 @@ class CompileProfiler:
     def __enter__(self):
         return self
 
-    def __exit__(self, typ, val, traceback):
+    def __exit__(self, exc_type, exc_value, exc_tb):
         pass
 
     def get_metrics(self):

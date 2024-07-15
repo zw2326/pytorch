@@ -1166,9 +1166,9 @@ class FakeTensorMode(TorchDispatchMode):
 
     def __exit__(
         self,
-        a: Optional[Type[BaseException]],
-        b: Optional[BaseException],
-        c: Optional[TracebackType],
+        exc_type: Optional[Type[BaseException]],
+        exc_value: Optional[BaseException],
+        exc_tb: Optional[TracebackType],
     ) -> None:
         (
             live,
@@ -1176,7 +1176,7 @@ class FakeTensorMode(TorchDispatchMode):
             maybe_prev_only_lift_cpu_tensors,
         ) = self.enter_stack.pop()
         if live:
-            out = super().__exit__(a, b, c)
+            out = super().__exit__(exc_type, exc_value, exc_tb)
             # Re-enable the previous fake mode, if there was one.
             if maybe_prev_fake_mode is not None:
                 torch._C._set_dispatch_mode(maybe_prev_fake_mode)
