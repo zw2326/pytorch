@@ -5,6 +5,8 @@
 #if !defined(__MAC_15_0) && \
     (!defined(MAC_OS_X_VERSION_15_0) || (MAC_OS_X_VERSION_MIN_REQUIRED < MAC_OS_X_VERSION_15_0))
 
+#define MPSDataTypeInt4 MPSDataTypeInvalid
+
 @interface MPSNDArrayIdentity : MPSNDArrayUnaryKernel
 -(MPSNDArray * __nullable) reshapeWithCommandBuffer: (__nullable id <MTLCommandBuffer>) cmdBuf
                                         sourceArray: (MPSNDArray * __nonnull) sourceArray
@@ -24,16 +26,25 @@
                                       strides:(MPSShape * _Nonnull)  strides;
 @end
 
+@interface MPSNDArrayQuantizationDescriptor : NSObject <NSCopying>
+@end
+
 @interface MPSNDArrayQuantizedMatrixMultiplication : MPSNDArrayMatrixMultiplication
 - (nonnull instancetype) initWithDevice: (nonnull id<MTLDevice>) device
              leftQuantizationDescriptor: (MPSNDArrayQuantizationDescriptor* _Nullable) leftQuantizationDescriptor
             rightQuantizationDescriptor: (MPSNDArrayQuantizationDescriptor* _Nullable) rightQuantizationDescriptor;
+
+-(void) encodeToCommandEncoder: (id <MTLComputeCommandEncoder> _Nullable)encoder
+                 commandBuffer: (nonnull id <MTLCommandBuffer>) commandBuffer
+                  sourceArrays: (nonnull NSArray <MPSNDArray *> *) sourceArrays
+              destinationArray: (nonnull MPSNDArray *) destination;
 @end
 
-@interface MPSNDArrayAffineQuantizationDescriptor()
+@interface MPSNDArrayAffineQuantizationDescriptor : MPSNDArrayQuantizationDescriptor
 - (nonnull instancetype) initWithDataType: (MPSDataType) quantizationDataType
                              hasZeroPoint: (BOOL) hasZeroPoint
                               hasMinValue: (BOOL) hasMinValue;
+@property (readwrite, nonatomic) bool implicitZeroPoint;
 @end
 
 #endif
