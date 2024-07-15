@@ -118,7 +118,8 @@ bool MPSDevice::isMacOS13Plus(MacOSVersion version) const {
   static bool _macos_13_3_plus = [compileOptions respondsToSelector:@selector(maxTotalThreadsPerThreadgroup)] == YES;
 
   static bool _macos_14_0_plus = [mpsCD instancesRespondToSelector:@selector(conjugateWithTensor:name:)] == YES;
-  static bool _macos_15_0_plus = [compileOptions respondsToSelector:@selector(fastMathEnabled)] == YES;
+  static bool _macos_15_0_plus = [mpsCD instancesRespondToSelector:@selector(variableFromTensorWithTensor:
+                                                                                                     name:)] == YES;
 
   // TODO: Change all version checks to use this API
   static bool _macos_14_4_plus = []() {
