@@ -4,14 +4,19 @@
 #include <ATen/Functions.h>
 #include <ATen/NativeFunctions.h>
 #else
+#include <ATen/ops/_convert_scales_and_zeros_mps_native.h>
 #include <ATen/ops/_convert_weight_to_int4pack_native.h>
 #include <ATen/ops/_weight_int4pack_mm_native.h>
 #include <ATen/ops/_weight_int8pack_mm_native.h>
+#include <ATen/ops/cat.h>
 #include <ATen/ops/empty.h>
+#include <ATen/ops/stack.h>
+#include <ATen/ops/transpose.h>
 #endif
 #include <ATen/mps/MPSProfiler.h>
 #include <ATen/native/mps/OperationUtils.h>
 #include <fmt/format.h>
+#include <iostream>
 
 // #define _CAPTURE_KERNEL 1
 
@@ -627,6 +632,7 @@ kernel void kernel_mul_mv(
      *      - threadgroup_N * nsg + sgitg -> the overall index of SIMD group, in all SIMD groups.
      *      - (threadgroup_N * nsg + sgitg) * nr -> the starting index of the row that this SIMD group needs to handle.
      */
+  float4 rc = 0;
     const int first_row = (threadgroup_N * nsg + sgitg) * nr;
 
     const uint offset0 = first_row * K;
@@ -730,32 +736,99 @@ Tensor _convert_weight_to_int4pack_mps(const Tensor& in, int64_t innerKTiles) {
   // shape {N / 8, K / (16 * innerKTiles), 32, innerKTiles / 2}
   auto weight_packed = at::empty({N / 8, K / (16 * innerKTiles), 32, innerKTiles / 2},
                                  at::TensorOptions().dtype(at::kInt).device(at::kMPS));
-  MPSStream* mpsStream = getCurrentMPSStream();
+  static const bool is_macOS_15_0_or_newer = is_macos_13_or_newer(MacOSVersion::MACOS_VER_15_0_PLUS);
+
+  if (!is_macOS_15_0_or_newer) {
+    MPSStream* mpsStream = getCurrentMPSStream();
   std::array<uint32_t, 4> sizes = {static_cast<uint32_t>(N), static_cast<uint32_t>(Kdiv2 / 4), 0, 0};
-  dispatch_sync_with_rethrow(mpsStream->queue(), ^() {
-    @autoreleasepool {
+    dispatch_sync_with_rethrow(mpsStream->queue(), ^() {
+      @autoreleasepool {
 #if _CAPTURE_KERNEL
-      if (getMPSProfiler().isCaptureEnabled()) {
+        if (getMPSProfiler().isCaptureEnabled()) {
         getMPSProfiler().startCapture(fmt::format("weight_to_int4pack_{}x{}", N, Kdiv2), mpsStream);
-      }
+        }
 #endif
-      id<MTLComputeCommandEncoder> computeEncoder = mpsStream->commandEncoder();
-      const std::string kernel = fmt::format("weight_to_int4pack");
-      id<MTLComputePipelineState> quantizedPSO = lib.getPipelineStateForFunc(kernel);
-      const auto maxThreadsPerGroup = [quantizedPSO maxTotalThreadsPerThreadgroup];
-      [computeEncoder setComputePipelineState:quantizedPSO];
-      mtl_setBuffer(computeEncoder, weight, 0);
-      mtl_setBuffer(computeEncoder, weight_packed, 1);
-      mtl_setBytes(computeEncoder, sizes, 2);
-      [computeEncoder dispatchThreads:MTLSizeMake(N, Kdiv2 / 4, 1) threadsPerThreadgroup:MTLSizeMake(64, 1, 1)];
+        id<MTLComputeCommandEncoder> computeEncoder = mpsStream->commandEncoder();
+        const std::string kernel = fmt::format("weight_to_int4pack");
+        id<MTLComputePipelineState> quantizedPSO = lib.getPipelineStateForFunc(kernel);
+        const auto maxThreadsPerGroup = [quantizedPSO maxTotalThreadsPerThreadgroup];
+        [computeEncoder setComputePipelineState:quantizedPSO];
+        mtl_setBuffer(computeEncoder, weight, 0);
+        mtl_setBuffer(computeEncoder, weight_packed, 1);
+        mtl_setBytes(computeEncoder, sizes, 2);
+        [computeEncoder dispatchThreads:MTLSizeMake(N, Kdiv2 / 4, 1) threadsPerThreadgroup:MTLSizeMake(64, 1, 1)];
 #if _CAPTURE_KERNEL
-      if (getMPSProfiler().isCapturing()) {
-        getMPSProfiler().stopCapture(mpsStream);
-      }
+        if (getMPSProfiler().isCapturing()) {
+          getMPSProfiler().stopCapture(mpsStream);
+        }
 #endif
-    }
-  });
+      }
+    });
+  } else {
+    std::string key = __func__ + getTensorsStringKey(in);
+    auto cachedGraph = LookUpOrCreateCachedGraph<MPSUnaryCachedGraph>(key, [&](auto mpsGraph, auto newCachedGraph) {
+      newCachedGraph->inputTensor_ = mpsGraphRankedPlaceHolder(mpsGraph, in);
+      MPSGraphTensor* uTensor = newCachedGraph->inputTensor_;
+      auto uTensor00 = [mpsGraph reinterpretCastTensor:newCachedGraph->inputTensor_ toType:MPSDataTypeUInt32 name:nil];
+
+      // Reshape to [x,x,2] and slice to get every other element:
+      auto uTensor2 = [mpsGraph reshapeTensor:uTensor00 withShape:@[ @(in.size(0)), @(in.size(1) / 2), @2 ] name:nil];
+      // 2 slices:
+      auto uTensor0 = [mpsGraph sliceTensor:uTensor2 dimension:2 start:0 length:1 name:nil];
+      auto uTensor1 = [mpsGraph sliceTensor:uTensor2 dimension:2 start:1 length:1 name:nil];
+      auto uTensor0S = [mpsGraph squeezeTensor:uTensor0 axis:-1 name:nil];
+      auto uTensor1S = [mpsGraph squeezeTensor:uTensor1 axis:-1 name:nil];
+
+      // Left-shift the second operand by 4 bits. ie multiply by 16:
+      auto fourTU = [mpsGraph constantWithScalar:4.0 dataType:MPSDataTypeUInt32];
+      auto mask = [mpsGraph constantWithScalar:0x0F dataType:MPSDataTypeUInt32];
+      auto andU1 = [mpsGraph bitwiseANDWithPrimaryTensor:uTensor1S secondaryTensor:mask name:nil];
+      auto shiftU1 = [mpsGraph bitwiseLeftShiftWithPrimaryTensor:andU1 secondaryTensor:fourTU name:nil];
+      auto andU2 = [mpsGraph bitwiseANDWithPrimaryTensor:uTensor0S secondaryTensor:mask name:nil];
+      auto packedU = [mpsGraph bitwiseORWithPrimaryTensor:andU2 secondaryTensor:shiftU1 name:nil];
+      auto resultU8 = [mpsGraph castTensor:packedU toType:MPSDataTypeUInt8 name:nil];
+      auto resultI8 = [mpsGraph reinterpretCastTensor:resultU8 toType:MPSDataTypeInt8 name:nil];
+      newCachedGraph->outputTensor_ = resultI8;
+    });
+    auto APlaceholder = Placeholder(cachedGraph->inputTensor_, in);
+    auto outputPlaceholder =
+        Placeholder(cachedGraph->outputTensor_, weight_packed, @[ @(in.numel() / 2) ], true, MPSDataTypeInt8);
+    runMPSGraph(
+        getCurrentMPSStream(), cachedGraph->graph(), dictionaryFromPlaceholders(APlaceholder), outputPlaceholder);
+  }
   return weight_packed;
+}
+
+Tensor _convert_scales_and_zeros_mps(const Tensor& scales, const Tensor& zeros) {
+  static const bool is_macOS_15_0_or_newer = is_macos_13_or_newer(MacOSVersion::MACOS_VER_15_0_PLUS);
+  if (is_macOS_15_0_or_newer) {
+    return at::stack({scales, zeros}).contiguous();
+  } else {
+    return at::transpose(at::cat({scales, zeros}, /*dim=*/2), 0, 1).contiguous();
+  }
+}
+
+static MPSNDArray* getMPSNDArrayQuant(const Tensor& t,
+                                      MPSShape* shape = nil,
+                                      MPSDataType dtype = MPSDataTypeInvalid,
+                                      bool transpose = true) {
+  if (dtype == MPSDataTypeInvalid) {
+    dtype = getMPSDataType(t.scalar_type());
+  }
+  if (shape == nil) {
+    shape = getMPSShape(t);
+  }
+
+  MPSNDArrayDescriptor* tensorNDArrayDesc = [MPSNDArrayDescriptor descriptorWithDataType:dtype shape:shape];
+  if (transpose && t.dim() > 1) {
+    [tensorNDArrayDesc transposeDimension:0 withDimension:1];
+  }
+  tensorNDArrayDesc.preferPackedRows = YES;
+
+  MPSNDArray* mpsNDArray = [[[MPSNDArray alloc] initWithBuffer:getMTLBufferStorage(t)
+                                                        offset:t.storage_offset() * t.element_size()
+                                                    descriptor:tensorNDArrayDesc] autorelease];
+  return mpsNDArray;
 }
 
 Tensor _weight_int4pack_mm_mps(const Tensor& A, const Tensor& B, int64_t qGroupSize, const Tensor& qScaleAndZeros) {
@@ -780,38 +853,71 @@ Tensor _weight_int4pack_mm_mps(const Tensor& A, const Tensor& B, int64_t qGroupS
               ": expect qGroupSize to be 32, 64, 128 or 256, got ",
               qGroupSize);
 
-  TORCH_CHECK(qScaleAndZeros.dim() == 3 && qScaleAndZeros.size(1) == N && qScaleAndZeros.size(2) == 2,
+  static const bool is_macOS_15_0_or_newer = is_macos_13_or_newer(MacOSVersion::MACOS_VER_15_0_PLUS);
+  TORCH_CHECK(qScaleAndZeros.dim() == 3 &&
+                  ((qScaleAndZeros.size(1) == N && qScaleAndZeros.size(2) == 2) || (is_macOS_15_0_or_newer)),
               __func__,
               ": expect qScaleAndZeros to be 3d tensor with sizes [:, ",
               N,
               ", 2]");
 
+  MPSShape* B_Shape = @[ @(N), @(K) ];
   auto C = at::empty({M, N}, A.options());
   MPSStream* mpsStream = getCurrentMPSStream();
-  std::array<uint32_t, 4> sizes = {static_cast<uint32_t>(M), static_cast<uint32_t>(K), static_cast<uint32_t>(N), 0};
+  id<MTLComputeCommandEncoder> computeEncoder = mpsStream->commandEncoder();
+
   dispatch_sync_with_rethrow(mpsStream->queue(), ^() {
     @autoreleasepool {
+      if (is_macOS_15_0_or_newer) {
+        id<MTLCommandBuffer> commandBuffer = mpsStream->commandBuffer();
+        auto scales = qScaleAndZeros[0];
+        auto minV = qScaleAndZeros[1];
+        MPSNDArray* minNDArray = getMPSNDArrayQuant(minV);
+        MPSNDArray* scalesNDArray = getMPSNDArrayQuant(scales);
+        MPSNDArray* weightsNDArray = getMPSNDArrayQuant(B, B_Shape, MPSDataTypeInt4);
+        MPSNDArray* activationNDArray = getMPSNDArrayQuant(A, nil, MPSDataTypeInvalid, /*transpose=*/false);
+        MPSNDArray* outpuNDArray = getMPSNDArrayQuant(C, nil, MPSDataTypeInvalid, /*transpose=*/false);
+
+        std::string key = __func__ + getTensorsStringKey({A, B, scales}, /*short_dtype=*/true, /*exclude_shape=*/true);
+        auto qmatmulKernel = LookUpOrCreateCachedMPSKernel<MPSNDArrayQuantizedMatrixMultiplication>(key, [&]() {
+          MPSNDArrayAffineQuantizationDescriptor* rightDesc =
+              [[[MPSNDArrayAffineQuantizationDescriptor alloc] initWithDataType:MPSDataTypeInt4
+                                                                   hasZeroPoint:false
+                                                                    hasMinValue:true] autorelease];
+          rightDesc.implicitZeroPoint = YES;
+          return [[MPSNDArrayQuantizedMatrixMultiplication alloc] initWithDevice:MPSDevice::getInstance()->device()
+                                                      leftQuantizationDescriptor:nil
+                                                     rightQuantizationDescriptor:rightDesc];
+        });
+        assert(qmatmulKernel != nil);
+        [qmatmulKernel encodeToCommandEncoder:computeEncoder
+                                commandBuffer:commandBuffer
+                                 sourceArrays:@[ activationNDArray, weightsNDArray, scalesNDArray, minNDArray ]
+                             destinationArray:outpuNDArray];
+      } else {
 #if _CAPTURE_KERNEL
-      if (getMPSProfiler().isCaptureEnabled()) {
-        getMPSProfiler().startCapture(fmt::format("int4pack_mm_{}x{}x{}", M, N, K), mpsStream);
-      }
+        if (getMPSProfiler().isCaptureEnabled()) {
+          getMPSProfiler().startCapture(fmt::format("int4pack_mm_{}x{}x{}", M, N, K), mpsStream);
+        }
 #endif
-      id<MTLComputeCommandEncoder> computeEncoder = mpsStream->commandEncoder();
-      const std::string kernel = fmt::format("int4pack_mm_{}_{}", qGroupSize, scalarToMetalTypeString(A));
-      id<MTLComputePipelineState> quantizedPSO = lib.getPipelineStateForFunc(kernel);
-      const auto maxThreadsPerGroup = static_cast<decltype(M)>([quantizedPSO maxTotalThreadsPerThreadgroup]);
-      [computeEncoder setComputePipelineState:quantizedPSO];
-      mtl_setBuffer(computeEncoder, A, 0);
-      mtl_setBuffer(computeEncoder, B, 1);
-      mtl_setBuffer(computeEncoder, qScaleAndZeros, 2);
-      mtl_setBuffer(computeEncoder, C, 3);
-      mtl_setBytes(computeEncoder, sizes, 4);
-      [computeEncoder dispatchThreads:MTLSizeMake(N / 4 * 32, 1, M) threadsPerThreadgroup:MTLSizeMake(64, 1, 1)];
+        const std::string kernel = fmt::format("int4pack_mm_{}_{}", qGroupSize, scalarToMetalTypeString(A));
+        std::array<uint32_t, 4> sizes = {
+            static_cast<uint32_t>(M), static_cast<uint32_t>(K), static_cast<uint32_t>(N), 0};
+        id<MTLComputePipelineState> quantizedPSO = lib.getPipelineStateForFunc(kernel);
+        const auto maxThreadsPerGroup = static_cast<decltype(M)>([quantizedPSO maxTotalThreadsPerThreadgroup]);
+        [computeEncoder setComputePipelineState:quantizedPSO];
+        mtl_setBuffer(computeEncoder, A, 0);
+        mtl_setBuffer(computeEncoder, B, 1);
+        mtl_setBuffer(computeEncoder, qScaleAndZeros, 2);
+        mtl_setBuffer(computeEncoder, C, 3);
+        mtl_setBytes(computeEncoder, sizes, 4);
+        [computeEncoder dispatchThreads:MTLSizeMake(N / 4 * 32, 1, M) threadsPerThreadgroup:MTLSizeMake(64, 1, 1)];
 #if _CAPTURE_KERNEL
-      if (getMPSProfiler().isCapturing()) {
-        getMPSProfiler().stopCapture(mpsStream);
-      }
+        if (getMPSProfiler().isCapturing()) {
+          getMPSProfiler().stopCapture(mpsStream);
+        }
 #endif
+      }
     }
   });
   return C;
@@ -821,6 +927,7 @@ Tensor _weight_int8pack_mm_mps(const Tensor& A, const Tensor& B, const Tensor& s
   auto M = A.size(0);
   auto N = B.size(0);
   auto K = A.size(1);
+  static const bool is_macOS_15_0_or_newer = is_macos_13_or_newer(MacOSVersion::MACOS_VER_15_0_PLUS);
 
   TORCH_CHECK(A.dtype() == kBFloat16 || A.dtype() == kHalf || A.dtype() == kFloat,
               __func__,
@@ -836,78 +943,75 @@ Tensor _weight_int8pack_mm_mps(const Tensor& A, const Tensor& B, const Tensor& s
 
   auto C = at::empty({M, N}, A.options());
   TORCH_CHECK(N % 32 == 0 && K % 32 == 0);
-#if 1
   MPSStream* mpsStream = getCurrentMPSStream();
-  std::array<uint32_t, 4> sizes = {static_cast<uint32_t>(M), static_cast<uint32_t>(K), static_cast<uint32_t>(N), 0};
+  id<MTLComputeCommandEncoder> computeEncoder = mpsStream->commandEncoder();
   dispatch_sync_with_rethrow(mpsStream->queue(), ^() {
     @autoreleasepool {
+      if (!is_macOS_15_0_or_newer ||
+          // issue: #131732811
+          A.scalar_type() == at::kBFloat16) {
+        std::array<uint32_t, 4> sizes = {
+            static_cast<uint32_t>(M), static_cast<uint32_t>(K), static_cast<uint32_t>(N), 0};
 #if _CAPTURE_KERNEL
-      if (getMPSProfiler().isCaptureEnabled()) {
-        getMPSProfiler().startCapture(fmt::format("int8pack_mm_{}x{}x{}", M, N, K), mpsStream);
-      }
+        if (getMPSProfiler().isCaptureEnabled()) {
+          getMPSProfiler().startCapture(fmt::format("int8pack_mm_{}x{}x{}", M, N, K), mpsStream);
+        }
 #endif
-      id<MTLComputeCommandEncoder> computeEncoder = mpsStream->commandEncoder();
-      std::string kernel;
-      // heuristic, to use mv kernel for mm with small M. M = 10 is the performance tipping point.
-      if (M < 12) {
-        kernel = fmt::format("int8pack_mv_{}", scalarToMetalTypeString(A));
-      } else {
-        kernel = fmt::format("large_m_int8pack_mm_{}", scalarToMetalTypeString(A));
-      }
-      id<MTLComputePipelineState> quantizedPSO = lib.getPipelineStateForFunc(kernel);
-      [computeEncoder setComputePipelineState:quantizedPSO];
-      mtl_setBuffer(computeEncoder, A, 0);
-      mtl_setBuffer(computeEncoder, B, 1);
-      mtl_setBuffer(computeEncoder, scales, 2);
-      mtl_setBuffer(computeEncoder, C, 3);
-      mtl_setBytes(computeEncoder, sizes, 4);
-      if (M < 12) {
-        [computeEncoder setThreadgroupMemoryLength:32 atIndex:0];
-        [computeEncoder dispatchThreadgroups:MTLSizeMake((N + 7) / 8, M, 1)
-                       threadsPerThreadgroup:MTLSizeMake(64, 1, 1)];
-      } else {
-        [computeEncoder setThreadgroupMemoryLength:12288 atIndex:0];
-        [computeEncoder dispatchThreadgroups:MTLSizeMake((M + 31) / 32, (N + 63) / 64, 1)
-                       threadsPerThreadgroup:MTLSizeMake(128, 1, 1)];
-      }
+        std::string kernel;
+        // heuristic, to use mv kernel for mm with small M. M = 10 is the performance tipping point.
+        if (M < 12) {
+          kernel = fmt::format("int8pack_mv_{}", scalarToMetalTypeString(A));
+        } else {
+          kernel = fmt::format("large_m_int8pack_mm_{}", scalarToMetalTypeString(A));
+        }
+        id<MTLComputePipelineState> quantizedPSO = lib.getPipelineStateForFunc(kernel);
+        [computeEncoder setComputePipelineState:quantizedPSO];
+        mtl_setBuffer(computeEncoder, A, 0);
+        mtl_setBuffer(computeEncoder, B, 1);
+        mtl_setBuffer(computeEncoder, scales, 2);
+        mtl_setBuffer(computeEncoder, C, 3);
+        mtl_setBytes(computeEncoder, sizes, 4);
+        if (M < 12) {
+          [computeEncoder setThreadgroupMemoryLength:32 atIndex:0];
+          [computeEncoder dispatchThreadgroups:MTLSizeMake((N + 7) / 8, M, 1)
+                         threadsPerThreadgroup:MTLSizeMake(64, 1, 1)];
+        } else {
+          [computeEncoder setThreadgroupMemoryLength:12288 atIndex:0];
+          [computeEncoder dispatchThreadgroups:MTLSizeMake((M + 31) / 32, (N + 63) / 64, 1)
+                         threadsPerThreadgroup:MTLSizeMake(128, 1, 1)];
+        }
 #if _CAPTURE_KERNEL
-      if (getMPSProfiler().isCapturing()) {
-        getMPSProfiler().stopCapture(mpsStream);
-      }
+        if (getMPSProfiler().isCapturing()) {
+          getMPSProfiler().stopCapture(mpsStream);
+        }
 #endif
+      } else {
+        id<MTLCommandBuffer> commandBuffer = mpsStream->commandBuffer();
+        MPSNDArray* scalesNDArray = getMPSNDArrayQuant(scales);
+        MPSNDArray* weightsNDArray = getMPSNDArrayQuant(B);
+        MPSNDArray* activationNDArray = getMPSNDArrayQuant(A, nil, MPSDataTypeInvalid, /*transpose=*/false);
+        MPSNDArray* outpuNDArray = getMPSNDArrayQuant(C, nil, MPSDataTypeInvalid, /*transpose=*/false);
+
+        std::string key = __func__ + getTensorsStringKey({A, B, scales}, /*short_dtype=*/true, /*exclude_shape=*/true);
+        auto qmatmulKernel = LookUpOrCreateCachedMPSKernel<MPSNDArrayQuantizedMatrixMultiplication>(key, [&]() {
+          MPSNDArrayAffineQuantizationDescriptor* rightDesc =
+              [[[MPSNDArrayAffineQuantizationDescriptor alloc] initWithDataType:getMPSDataType(B.scalar_type())
+                                                                   hasZeroPoint:false
+                                                                    hasMinValue:false] autorelease];
+
+          return [[MPSNDArrayQuantizedMatrixMultiplication alloc] initWithDevice:MPSDevice::getInstance()->device()
+                                                      leftQuantizationDescriptor:nil
+                                                     rightQuantizationDescriptor:rightDesc];
+        });
+
+        assert(qmatmulKernel != nil);
+        [qmatmulKernel encodeToCommandEncoder:computeEncoder
+                                commandBuffer:commandBuffer
+                                 sourceArrays:@[ activationNDArray, weightsNDArray, scalesNDArray ]
+                             destinationArray:outpuNDArray];
+      }
     }
   });
-#else
-  struct CachedGraph : public MPSCachedGraph {
-    CachedGraph(MPSGraph* graph) : MPSCachedGraph(graph) {}
-    MPSGraphTensor *ATensor = nil, *BTensor = nil, *scalesTensor = nil;
-    MPSGraphTensor* outputTensor = nil;
-  };
-  @autoreleasepool {
-    std::string key = __func__ + getTensorsStringKey({A, B, scales});
-    auto cachedGraph = LookUpOrCreateCachedGraph<CachedGraph>(key, [&](auto mpsGraph, auto newCachedGraph) {
-      newCachedGraph->ATensor = mpsGraphRankedPlaceHolder(mpsGraph, A);
-      newCachedGraph->BTensor = mpsGraphRankedPlaceHolder(mpsGraph, B);
-      newCachedGraph->scalesTensor = mpsGraphRankedPlaceHolder(mpsGraph, scales);
-      auto castB = castMPSTensor(mpsGraph, newCachedGraph->BTensor, getMPSScalarType(A));
-      auto transposedB = [mpsGraph transposeTensor:castB dimension:-1 withDimension:-2 name:nil];
-      auto mmTensor = [mpsGraph matrixMultiplicationWithPrimaryTensor:newCachedGraph->ATensor
-                                                      secondaryTensor:transposedB
-                                                                 name:nil];
-      newCachedGraph->outputTensor = [mpsGraph multiplicationWithPrimaryTensor:mmTensor
-                                                               secondaryTensor:newCachedGraph->scalesTensor
-                                                                          name:nil];
-    });
-    auto APlaceholder = Placeholder(cachedGraph->ATensor, A);
-    auto BPlaceholder = Placeholder(cachedGraph->BTensor, B);
-    auto scalesPlaceholder = Placeholder(cachedGraph->scalesTensor, scales);
-    auto outputPlaceholder = Placeholder(cachedGraph->outputTensor, C);
-    runMPSGraph(getCurrentMPSStream(),
-                cachedGraph->graph(),
-                dictionaryFromPlaceholders(APlaceholder, BPlaceholder, scalesPlaceholder),
-                outputPlaceholder);
-  }
-#endif
 
   return C;
 }

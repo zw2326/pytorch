@@ -482,15 +482,18 @@ def _group_quantize_tensor(w, n_bit=4, q_group_size=16):
     # load as a 32-bit word
     scales = scales.view(w.shape[0], -1)
     zeros = zeros.view(w.shape[0], -1)
-    scales_and_zeros = (
-        torch.cat(
-            [
-                scales.reshape(scales.size(0), scales.size(1), 1),
-                zeros.reshape(zeros.size(0), zeros.size(1), 1),
-            ],
-            2,
-        ).transpose(0, 1).contiguous()
-    )
+    if (w.device.type == "mps"):
+        scales_and_zeros = torch._convert_scales_and_zeros_mps(scales, zeros)
+    else:
+        scales_and_zeros = (
+            torch.cat(
+                [
+                    scales.reshape(scales.size(0), scales.size(1), 1),
+                    zeros.reshape(zeros.size(0), zeros.size(1), 1),
+                ],
+                2,
+            ).transpose(0, 1).contiguous()
+        )
 
     return out_uint8, scales_and_zeros
 

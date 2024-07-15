@@ -4131,6 +4131,8 @@
     CPU: _int_mm_out_cpu
     CUDA: _int_mm_out_cuda
 
+- func: _convert_scales_and_zeros_mps(Tensor scales, Tensor zeros) -> Tensor
+
 - func: _convert_weight_to_int4pack(Tensor self, int innerKTiles) -> Tensor
   dispatch:
     CPU: _convert_weight_to_int4pack_cpu
