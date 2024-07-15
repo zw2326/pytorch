@@ -16,7 +16,6 @@
 #include <ATen/mps/MPSProfiler.h>
 #include <ATen/native/mps/OperationUtils.h>
 #include <fmt/format.h>
-#include <iostream>
 
 // #define _CAPTURE_KERNEL 1
 
@@ -632,7 +631,6 @@ kernel void kernel_mul_mv(
      *      - threadgroup_N * nsg + sgitg -> the overall index of SIMD group, in all SIMD groups.
      *      - (threadgroup_N * nsg + sgitg) * nr -> the starting index of the row that this SIMD group needs to handle.
      */
-  float4 rc = 0;
     const int first_row = (threadgroup_N * nsg + sgitg) * nr;
 
     const uint offset0 = first_row * K;
