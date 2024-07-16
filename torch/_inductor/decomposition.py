@@ -4,7 +4,8 @@ import logging
 import math
 import sys
 import typing
-from typing import Optional
+from functools import wraps
+from typing import Optional, Union
 
 import torch
 import torch._decomp as decomp
@@ -29,7 +30,6 @@ from torch._prims_common import (
     type_to_dtype,
 )
 from torch.fx.experimental.symbolic_shapes import definitely_true, guard_size_oblivious
-
 from . import config, inductor_prims
 from .utils import (
     is_gpu,
@@ -83,7 +83,43 @@ inductor_decompositions = get_decompositions(
         quantized.linear_dynamic_fp16_unpacked_weight,
     ]
 )
+
+
+def dont_decompose_device(skip_device):
+    def decorator(func):
+        @wraps(func)
+        def wrapper(*args, **kwargs):
+            for arg in args:
+                if isinstance(arg, torch.Tensor) and arg.device == skip_device:
+                    return NotImplemented
+            for value in kwargs.values():
+                if isinstance(value, torch.Tensor) and value.device == skip_device:
+                    return NotImplemented
+            return func(*args, **kwargs)
+
+        return wrapper
+
+    return decorator
+
+
+def dont_decompose_op_for_device(
+    op: Union[torch._ops.OpOverloadPacket, torch._ops.OpOverload],
+    device: Union[str, torch.device],
+):
+    device = torch.device(device)
+    ops = (
+        [getattr(op, overload) for overload in op]
+        if isinstance(op, torch._ops.OpOverloadPacket)
+        else [op]
+    )
+
+    orig_decomps = get_decompositions(ops)
+    for op in ops:
+        decompositions[op] = dont_decompose_device(device)(orig_decomps[op])
+
+
 decompositions = {**core_aten_decompositions(), **inductor_decompositions}
+dont_decompose_op_for_device(aten.gelu, "cpu")
 
 # Remove unwanted decompositions included via the core ATen decompositions from
 # the Inductor decomp table.
