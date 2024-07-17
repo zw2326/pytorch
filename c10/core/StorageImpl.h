@@ -139,6 +139,11 @@ struct C10_API StorageImpl : public c10::intrusive_ptr_target {
     if (C10_UNLIKELY(throw_on_immutable_data_ptr_)) {
       throw_data_ptr_access_error();
     }
+    maybe_check_cowsim_read();
+    return data_ptr_;
+  }
+
+  const at::DataPtr& _data_ptr_no_checks() const {
     return data_ptr_;
   }
 
@@ -154,6 +159,7 @@ struct C10_API StorageImpl : public c10::intrusive_ptr_target {
         warnDeprecatedDataPtr();
       }
       maybe_materialize_cow();
+      maybe_check_cowsim_write();
     }
     return data_ptr_;
   }
@@ -168,6 +174,7 @@ struct C10_API StorageImpl : public c10::intrusive_ptr_target {
     // We need to materialize the old COW DataPtr because it is
     // being returned as mutable.
     maybe_materialize_cow();
+    // TODO: I probably need to do something here
     return set_data_ptr_no_materialize_cow(std::move(data_ptr));
   }
 
@@ -180,6 +187,7 @@ struct C10_API StorageImpl : public c10::intrusive_ptr_target {
     if (C10_UNLIKELY(throw_on_immutable_data_ptr_)) {
       throw_data_ptr_access_error();
     }
+    maybe_check_cowsim_read();
     return data_ptr_.get();
   }
 
@@ -195,6 +203,7 @@ struct C10_API StorageImpl : public c10::intrusive_ptr_target {
         warnDeprecatedDataPtr();
       }
       maybe_materialize_cow();
+      maybe_check_cowsim_write();
     }
     return data_ptr_.mutable_get();
   }
@@ -314,7 +323,7 @@ struct C10_API StorageImpl : public c10::intrusive_ptr_target {
 
  private:
   void refresh_has_data_ptr_check() {
-    has_mutable_data_ptr_check_ = is_cow() || throw_on_mutable_data_ptr_ ||
+    has_mutable_data_ptr_check_ = is_cow() || is_cowsim() || throw_on_mutable_data_ptr_ ||
         warn_deprecated_on_mutable_data_ptr_ || throw_on_immutable_data_ptr_;
   }
 
@@ -322,10 +331,26 @@ struct C10_API StorageImpl : public c10::intrusive_ptr_target {
     return c10::impl::cow::is_cow_data_ptr(data_ptr_);
   }
 
+  inline bool is_cowsim() const {
+    return c10::impl::cow::is_cowsim_data_ptr(data_ptr_);
+  }
+
   // Triggers a copy if this is a copy-on-write tensor.
   void maybe_materialize_cow() {
     if (is_cow()) {
       impl::cow::materialize_cow_storage(*this);
+    }
+  }
+
+  void maybe_check_cowsim_write() {
+    if (is_cowsim()) {
+      impl::cow::check_cowsim_write(*this);
+    }
+  }
+
+  void maybe_check_cowsim_read() const {
+    if (is_cowsim()) {
+      impl::cow::check_cowsim_read(*this);
     }
   }
 
