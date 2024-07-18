@@ -1953,7 +1953,12 @@ def is_contiguous_storage_and_layout(x):
 
 
 def as_storage_and_layout(
-    x, freeze=True, want_contiguous=False, stride_order=None, allow_padding=False, actual_strides=None
+    x,
+    freeze=True,
+    want_contiguous=False,
+    stride_order=None,
+    allow_padding=False,
+    actual_strides=None,
 ):
     """
     Try to simplify x into a StorageBox and a Layout.
@@ -1968,7 +1973,7 @@ def as_storage_and_layout(
             want_contiguous=want_contiguous,
             stride_order=stride_order,
             allow_padding=allow_padding,
-            actual_strides=actual_strides
+            actual_strides=actual_strides,
         )
     if isinstance(x, StorageBox) and isinstance(x.data, Buffer):
         if freeze:
@@ -3259,7 +3264,9 @@ class Buffer(IRNode):
 
     def freeze_layout_with_actual_strides(self, actual_strides, allow_padding=False):
         assert isinstance(self.layout, FlexibleLayout)
-        self.layout = self.layout.as_actual_strides(actual_strides, allow_padding=allow_padding)
+        self.layout = self.layout.as_actual_strides(
+            actual_strides, allow_padding=allow_padding
+        )
 
     def is_zero_elements(self):
         return V.graph.sizevars.is_expr_static_and_true(sympy.Eq(self.get_numel(), 0))  # type: ignore[arg-type]
@@ -4511,25 +4518,34 @@ class ExternKernel(InputsKernel):
                     actual_strides=actual_strides,
                 )
                 return x
-            elif isinstance(
-                x.get_layout(), FixedLayout
-            ) and x.get_layout().is_stride_ordered(order):
+            elif (
+                isinstance(x.get_layout(), FixedLayout)
+                and order
+                and x.get_layout().is_stride_ordered(order)
+            ):
                 return x
             elif isinstance(x.get_layout(), MutationLayoutSHOULDREMOVE):
                 if isinstance(x.get_layout().real_layout(), FlexibleLayout):
                     raise AssertionError(
                         "the MutationLayoutSHOULDREMOVE's real layout shouldn't be FlexibleLayout"
                     )
-                elif isinstance(
-                    x.get_layout().real_layout(), FixedLayout
-                ) and x.get_layout().real_layout().is_stride_ordered(order):
+                elif (
+                    isinstance(x.get_layout().real_layout(), FixedLayout)
+                    and order
+                    and x.get_layout().real_layout().is_stride_ordered(order)
+                ):
                     return x
 
         # TODO - Storage to InputBuffer
-        if isinstance(x, InputBuffer) and x.get_layout().is_stride_ordered(order):
+        if (
+            isinstance(x, InputBuffer)
+            and order
+            and x.get_layout().is_stride_ordered(order)
+        ):
             return x
         if (
-            isinstance(x, TensorBox)
+            order
+            and isinstance(x, TensorBox)
             and isinstance(x.data, BaseView)
             and not isinstance(x.data, ReinterpretView)
             and is_storage_and_layout(x.unwrap_view())
