@@ -294,6 +294,7 @@ __all__ = [
     "unfold",
     "unfold_copy",
     "unsqueeze",
+    "unsqueeze_copy",
     "view",
     "view_as",
     "view_copy",
@@ -6324,6 +6325,7 @@ expand_copy = _make_copy_from_view(aten.expand)
 narrow_copy = _make_copy_from_view(aten.narrow)
 t_copy = _make_copy_from_view(aten.t)
 squeeze_copy = _make_copy_from_view(aten.squeeze)
+unsqueeze_copy = _make_copy_from_view(aten.unsqueeze)
 view_copy = _make_copy_from_view(aten.view)
 
 
