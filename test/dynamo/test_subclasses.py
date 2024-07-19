@@ -21,6 +21,7 @@ from torch.fx.experimental.symbolic_shapes import (
     StatelessSymbolicContext,
 )
 from torch.nested._internal.nested_tensor import (
+    branch_nested_int_registry,
     jagged_from_list,
     jagged_from_tensor_and_lengths,
     nested_view_from_values_offsets,
@@ -1757,6 +1758,229 @@ class TestNestedTensor(torch._dynamo.test_case.TestCase):
         nt3, _ = self._get_jagged_tensor(((2, 3, 4), 5), None)
         self._check_recompiles(binary, (nt1, nt2), (nt1, nt3), True)
 
+    def test_compiled_jagged_construction(self):
+        def _gen_grad_outputs(out_val):
+            if isinstance(out_val, (list, tuple)):
+                return tuple(torch.ones_like(c) for c in out_val)
+            else:
+                return (torch.ones_like(out_val),)
+
+        def _validate_compile(fn, arg_fn):
+            with branch_nested_int_registry():
+                from torch.nested._internal.nested_tensor import _nested_int_registry
+
+                registry_before = list(_nested_int_registry.items())
+                compiled = torch.compile(fn, fullgraph=True, backend="aot_eager")
+                registry_after = list(_nested_int_registry.items())
+                self.assertEqual(registry_before, registry_after)
+
+                args = arg_fn()
+                compile_out = compiled(*args)
+                compile_grads = []
+                g_args = [arg for arg in args if arg.requires_grad]
+                if len(g_args) > 0:
+                    compile_grad_outputs = _gen_grad_outputs(compile_out)
+                    compile_grads = torch.autograd.grad(
+                        compile_out, inputs=g_args, grad_outputs=compile_grad_outputs
+                    )
+
+            with branch_nested_int_registry():
+                args = arg_fn()
+                ref_out = fn(*args)
+                ref_grads = []
+                g_args = [arg for arg in args if arg.requires_grad]
+                if len(g_args) > 0:
+                    ref_grad_outputs = _gen_grad_outputs(ref_out)
+                    ref_grads = torch.autograd.grad(
+                        ref_out, inputs=g_args, grad_outputs=ref_grad_outputs
+                    )
+
+            if isinstance(compile_out, (list, tuple)):
+                # TODO: Fix assertEqual() to support NJTs so this isn't necessary
+                self.assertEqual(len(compile_out), len(ref_out))
+                for c, r in zip(compile_out, ref_out):
+                    self.assertEqual(c, r)
+            else:
+                self.assertEqual(compile_out, ref_out)
+
+            # verify backward
+            for compile_grad, ref_grad in zip(compile_grads, ref_grads):
+                self.assertEqual(compile_grad, ref_grad)
+
+        # === Basic case ===
+        def fn(values, offsets):
+            return torch.nested.nested_tensor_from_jagged(values * 2, offsets) * 2
+
+        values = torch.randn(10, 5, requires_grad=True)
+        offsets = torch.tensor([0, 2, 6, 10], dtype=torch.int64)
+        _validate_compile(fn, arg_fn=lambda: (values, offsets))
+
+        # === Construct two NJTs with different offsets ===
+        def fn(values, offsets1, offsets2):
+            nt1 = torch.nested.nested_tensor_from_jagged(values * 2, offsets1)
+            nt2 = torch.nested.nested_tensor_from_jagged(values * 3, offsets2)
+            return nt2, nt1
+
+        values = torch.randn(10, 5, requires_grad=True)
+        offsets = torch.tensor([0, 2, 6, 10], dtype=torch.int64)
+        offsets2 = torch.tensor([0, 1, 4, 10], dtype=torch.int64)
+        _validate_compile(fn, arg_fn=lambda: (values, offsets, offsets2))
+
+        # === Construct one NJT with offsets of another ===
+        def fn(nt, other_values):
+            nt2 = torch.nested.nested_tensor_from_jagged(other_values, nt.offsets())
+            return nt + nt2
+
+        values = torch.randn(9, 5, requires_grad=True)
+        other_values = torch.randn(9, 5, requires_grad=True)
+        offsets = torch.tensor([0, 2, 6, 9], dtype=torch.int64)
+
+        def arg_fn(values=values, other_values=other_values, offsets=offsets):
+            nt = torch.nested.nested_tensor_from_jagged(values, offsets)
+            return nt, other_values
+
+        _validate_compile(fn, arg_fn=arg_fn)
+
+        # === Construct an NJT from lengths ===
+        def fn(values, lengths):
+            nt = torch.nested.nested_tensor_from_jagged(values, lengths=lengths)
+            return nt.sin()
+
+        values = torch.randn(9, 5, requires_grad=True)
+        lengths = torch.tensor([2, 4, 3])
+        _validate_compile(fn, arg_fn=lambda: (values, lengths))
+
+        # === Construct an NJT from lengths -> offsets via manual computation ===
+        def fn(values, lengths):
+            offsets = torch.cat([lengths.new_zeros(1), lengths.cumsum(0)])
+            nt = torch.nested.nested_tensor_from_jagged(values, offsets)
+            nt2 = torch.nested.nested_tensor_from_jagged(values, offsets)
+            return (nt * nt2).sin()
+
+        values = torch.randn(9, 5, requires_grad=True)
+        lengths = torch.tensor([2, 4, 3])
+        _validate_compile(fn, arg_fn=lambda: (values, lengths))
+
+        # === Construct an NJT with cloned offsets ===
+        # NB: AOTAutograd runs multiple fw passes for metadata collection analysis, so
+        # dynamically generating an offsets is a good test case to ensure we're handling
+        # shapes correctly here.
+        def fn(values, offsets):
+            return torch.nested.nested_tensor_from_jagged(values * 2, offsets.clone())
+
+        values = torch.randn(10, 5, requires_grad=True)
+        offsets = torch.tensor([0, 2, 6, 10], dtype=torch.int64)
+        _validate_compile(fn, arg_fn=lambda: (values, offsets))
+
+        # === Construct two NJTs with cloned offsets ===
+        def fn(values, offsets):
+            nt1 = torch.nested.nested_tensor_from_jagged(values * 2, offsets.clone())
+            nt2 = torch.nested.nested_tensor_from_jagged(values * 3, offsets.clone())
+            return nt2, nt1
+
+        values = torch.randn(10, 5, requires_grad=True)
+        offsets = torch.tensor([0, 2, 6, 10], dtype=torch.int64)
+        _validate_compile(fn, arg_fn=lambda: (values, offsets))
+
+        # ensure output values have different ragged structures due to the offsets clone()s
+        compiled = torch.compile(fn, fullgraph=True, backend="aot_eager")
+        compile_out = compiled(values, offsets)
+        nt2 = compile_out[0]
+        nt1 = compile_out[1]
+        # FAILS now!
+        # self.assertFalse(nt1.shape == nt2.shape)
+
+        # === Binary op guarding ===
+        def fn(values, offsets, offsets2):
+            nt1 = torch.nested.nested_tensor_from_jagged(values * 2, offsets)
+            nt2 = torch.nested.nested_tensor_from_jagged(values * 3, offsets2)
+            return nt1 * nt2
+
+        values = torch.randn(10, 5, requires_grad=True)
+        offsets = torch.tensor([0, 2, 6, 10], dtype=torch.int64)
+
+        guard_codes = []
+
+        def guard_debug(guards):
+            for g in guards:
+                if g.code_list is not None:
+                    guard_codes.append(g.code_list[0])
+
+        # Proper guard is attached
+        compiled = torch._dynamo.optimize(
+            nopython=True,
+            backend="aot_eager",
+            guard_export_fn=guard_debug,
+            dynamic=True,
+        )(fn)
+        out = compiled(values, offsets, offsets)
+        self.assertIn("L['offsets'] is L['offsets2']", guard_codes)
+
+        # Triggers recompile, and then properly errors due to jagged mismatch
+        with self.assertRaisesRegex(
+            RuntimeError, "cannot call binary pointwise function mul.Tensor"
+        ):
+            different_offsets = torch.tensor([0, 1, 5, 10], dtype=torch.int64)
+            compiled(values, offsets, different_offsets)
+
+        # should work with the same offsets passed twice
+        _validate_compile(fn, arg_fn=lambda: (values, offsets, offsets))
+
+        # === Offsets which is an intermediate ===
+        def fn(values, offsets):
+            return (
+                torch.nested.nested_tensor_from_jagged(values * 2, offsets.clone()) * 2
+            )
+
+        values = torch.randn(10, 5, requires_grad=True)
+        offsets = torch.tensor([0, 2, 6, 10], dtype=torch.int64)
+        # _validate_compile(fn, values, offsets)
+
+        # should not recompile when different offsets is used
+        with unittest.mock.patch("torch._dynamo.config.error_on_recompile", True):
+            different_offsets = torch.tensor([0, 1, 5, 10], dtype=torch.int64)
+            _validate_compile(fn, arg_fn=lambda: (values, different_offsets))
+
+        # === Offsets constructed in-graph ===
+        def fn(values):
+            offsets = torch.tensor([0, 2, 6, 10], dtype=torch.int64)
+            nt = torch.nested.nested_tensor_from_jagged(values, offsets)
+            values2 = torch.ones_like(values)
+            nt2 = torch.nested.nested_tensor_from_jagged(values2, offsets)
+            return nt * nt2
+
+        values = torch.randn(10, 5).requires_grad_(True)
+        _validate_compile(fn, arg_fn=lambda: (values,))
+
+        # === Mixed case ===
+        def fn(nt, values, offsets):
+            nt2 = torch.nested.nested_tensor_from_jagged(values, offsets)
+            return nt * nt2
+
+        values = torch.randn(10, 5, requires_grad=True)
+        offsets = torch.tensor([0, 2, 6, 10], dtype=torch.int64)
+
+        def arg_fn(values=values, offsets=offsets):
+            nt = torch.nested.nested_tensor_from_jagged(values, offsets)
+            return nt, values, offsets
+
+        _validate_compile(fn, arg_fn)
+
+        # === More involved mixed case ===
+        def fn(nt, values, offsets):
+            nt1 = torch.nested.nested_tensor_from_jagged(values * 2, offsets)
+            nt2 = torch.nested.nested_tensor_from_jagged(values * 3, offsets)
+            return nt1 + nt2 + nt
+
+        values = torch.randn(9, 5, requires_grad=True)
+        offsets = torch.tensor([0, 2, 6, 9], dtype=torch.int64)
+
+        def arg_fn(values=values, offsets=offsets):
+            nt = torch.nested.nested_tensor_from_jagged(values, offsets)
+            return nt, values, offsets
+
+        _validate_compile(fn, arg_fn)
+
     # TODO: cannot parametrize this test class with device for some reason
     def _test_autograd(self, backend):
         a = torch.randn(2, 3, requires_grad=True, dtype=torch.float64)
@@ -1906,29 +2130,39 @@ class TestNestedTensor(torch._dynamo.test_case.TestCase):
             # varies based on the type of view
             guard_str = "\n".join(guards)
             if nt_view_name == "subclass_dense":
-                self.assertExpectedInline(guard_str, """Eq(s3 - 1, s0)""")
+                self.assertExpectedInline(
+                    guard_str,
+                    """\
+Eq(s3 - 1, s0)
+Eq(s4, s1)""",
+                )
             elif nt_view_name == "dense_subclass_dense_subclass":
                 self.assertExpectedInline(
                     guard_str,
                     """\
 Eq(s5 - 1, s2)
-Eq(s11 - 1, s6)
-Eq(s10, s8)""",
+Eq(s6, s3)
+Eq(s12 - 1, s7)
+Eq(s13, s8)
+Eq(s11, s9)""",
                 )
             elif nt_view_name.startswith("base_is_nt_True"):
                 self.assertExpectedInline(
                     guard_str,
                     """\
 Eq(s3 - 1, s0)
-Eq(zf1, zf6)""",
+Eq(s4, s1)
+Eq(s1, s7)""",
                 )
             else:
                 self.assertExpectedInline(
                     guard_str,
                     """\
 Eq(s4 - 1, s1)
-Eq(s12 - 1, s7)
-Eq(s11, s9)""",
+Eq(s5, s2)
+Eq(s13 - 1, s8)
+Eq(s14, s9)
+Eq(s12, s10)""",
                 )
             return gm
 

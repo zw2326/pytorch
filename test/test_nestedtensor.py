@@ -3554,7 +3554,7 @@ class TestNestedTensorSubclass(TestCase):
         ):
             torch.ops.aten.size.default(nt)
 
-        nested_int = torch.nested._internal.nested_tensor.get_tensor_symint(
+        nested_int = torch.nested._internal.nested_tensor._nested_int_registry.get(
             _offsets, coeff=1
         )
         self.assertEqual(nt.size(), (3, nested_int, 3))
@@ -5012,7 +5012,6 @@ class TestNestedTensorSubclass(TestCase):
             lambda: nt.unbind(),
         )
 
-    @xfailIfTorchDynamo
     def test_layer_norm_2(self, device):
         test_tensor_list = self._get_list_for_jagged_tensor(
             ((2, 3, 4), 3), device=device, requires_grad=True

@@ -141,6 +141,14 @@ def run_functionalized_fw_and_collect_metadata(
         else:
             return t
 
+    # NB: emulate idempotence by doing metadata collection in a freshly-branched nested int
+    # registry that is discarded at the end. There is one quirk to this: AOTAutograd depends
+    # on traced tangents to remain in the registry between invocations of
+    # run_functionalized_fw_and_collect_metadata(). To accomplish this, the corresponding
+    # registry entries for traced tangents are included in the returned ViewAndMutationMeta.
+    from torch.nested._internal.nested_tensor import branch_nested_int_registry
+
+    @branch_nested_int_registry(merge_on_exit=True)
     @wraps(f)
     def inner(*flat_args):
         # This function is meant to be run with the forward, which expects a flat list of tensor/symint/other args.
@@ -160,6 +168,7 @@ def run_functionalized_fw_and_collect_metadata(
         # It doesn't matter if we run this under predispatch or not because it is
         # only for figuring out metadata
         mode = FunctionalTensorMode(_allow_token_discovery=True)
+
         with disable_above, mode:
             # precondition: The passed in function already handles unflattening inputs + flattening outputs
             flat_f_args = pytree.tree_map(_to_fun, flat_args)
@@ -631,7 +640,16 @@ from a multi-output view call"
                     t, lambda _, inner_t: view_avoid_dupes_with_primals(inner_t)
                 )
             if isinstance(t, Tensor):
-                return t.view(t.shape)
+                out = t.view(t.shape)
+
+                # indicate that the viewed tensor has the same associated nested int
+                # as the source tensor within the nested int registry
+                from torch.nested._internal.nested_tensor import _nested_int_registry
+
+                if t in _nested_int_registry:
+                    _nested_int_registry.set(out, _nested_int_registry.get(t))
+
+                return out
             return t
 
         # This analysis function returns *only* the outputs that are meant to be tangents to the backwards.
