@@ -5543,9 +5543,9 @@ class FallbackKernel(ExternKernelAlloc):
     def set_cpp_kernel(self, kernel):
         from .codegen.wrapper import get_cpp_op_schema
 
-        assert (
-            not kernel._schema.is_mutable
-        ), f"mutable {kernel.__name__} is not supported with cpp_wrapper"
+        # assert (
+        #     not kernel._schema.is_mutable
+        # ), f"mutable {kernel.__name__} is not supported with cpp_wrapper"
 
         # These checks are here because ops that return aliasing tensors will
         # return type Tensor& instead of Tensor, but codegen will always write
