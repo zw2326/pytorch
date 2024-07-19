@@ -1,6 +1,7 @@
 # mypy: ignore-errors
 
 import contextlib
+import copy
 import functools
 import inspect
 import itertools
@@ -1858,6 +1859,12 @@ class BuiltinVariable(VariableTracker):
             unimplemented(f"call_id with args {args}")
 
     def call_deepcopy(self, tx, x):
+        if isinstance(
+            x, variables.UserDefinedObjectVariable
+        ) and not tx.output.side_effects.has_pending_mutation(x):
+            return variables.UserDefinedObjectVariable(
+                copy.deepcopy(x.value), mutable_local=MutableLocal()
+            )
         unimplemented(f"copy.deepcopy {repr(x)}")
 
     def _comparison_with_tensor(self, tx, left, right):
