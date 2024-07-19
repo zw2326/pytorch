@@ -1,17 +1,17 @@
-#include <c10/util/WaitCounter.h>
+#include <torch/csrc/monitor/instrumentation.h>
 
 #include <chrono>
 #include <string_view>
 
-namespace c10::monitor {
+namespace torch::monitor {
 
 namespace detail {
 namespace {
 using WaitCounterBackendFactories =
     std::vector<std::shared_ptr<WaitCounterBackendFactoryIf>>;
 
-Synchronized<WaitCounterBackendFactories>& waitCounterBackendFactories() {
-  static auto instance = new Synchronized<WaitCounterBackendFactories>();
+c10::Synchronized<WaitCounterBackendFactories>& waitCounterBackendFactories() {
+  static auto instance = new c10::Synchronized<WaitCounterBackendFactories>();
   return *instance;
 }
 } // namespace
@@ -19,7 +19,7 @@ Synchronized<WaitCounterBackendFactories>& waitCounterBackendFactories() {
 class WaitCounterImpl {
  public:
   static WaitCounterImpl& getInstance(std::string_view key) {
-    static auto& implMapSynchronized = *new Synchronized<
+    static auto& implMapSynchronized = *new c10::Synchronized<
         std::unordered_map<std::string, std::unique_ptr<WaitCounterImpl>>>();
 
     return *implMapSynchronized.withLock([&](auto& implMap) {
@@ -38,9 +38,9 @@ class WaitCounterImpl {
     });
   }
 
-  SmallVector<intptr_t> start() noexcept {
+  c10::SmallVector<intptr_t> start() noexcept {
     auto now = std::chrono::steady_clock::now();
-    SmallVector<intptr_t> ctxs;
+    c10::SmallVector<intptr_t> ctxs;
     ctxs.reserve(backends_.size());
     for (const auto& backend : backends_) {
       ctxs.push_back(backend->start(now));
@@ -48,7 +48,7 @@ class WaitCounterImpl {
     return ctxs;
   }
 
-  void stop(SmallVector<intptr_t>&& ctxs) noexcept {
+  void stop(c10::SmallVector<intptr_t>&& ctxs) noexcept {
     auto now = std::chrono::steady_clock::now();
     assert(ctxs.size() == backends_.size());
     for (size_t i = 0; i < ctxs.size(); ++i) {
@@ -67,7 +67,7 @@ class WaitCounterImpl {
     }
   }
 
-  SmallVector<std::unique_ptr<WaitCounterBackendIf>> backends_;
+  c10::SmallVector<std::unique_ptr<WaitCounterBackendIf>> backends_;
 };
 
 void registerWaitCounterBackend(
@@ -86,7 +86,7 @@ void WaitCounterHandle::start(std::chrono::steady_clock::time_point now) {
   // implement
 }
 
-void WaitCounterHandle::stop(SmallVector<intptr_t>&& ctxs) {
+void WaitCounterHandle::stop(c10::SmallVector<intptr_t>&& ctxs) {
   return impl_.stop(std::move(ctxs));
 }
-} // namespace c10::monitor
+} // namespace torch::monitor
