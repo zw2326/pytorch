@@ -180,6 +180,7 @@ class ValueRanges(Generic[_T]):
         integer_types = (sympy.Integer, NegativeIntInfinity, IntInfinity)
         is_int_lower = isinstance(lower, integer_types)
         is_int_upper = isinstance(upper, integer_types)
+        assert is_int_lower == is_int_upper, (lower, upper)
 
         # Because this is a frozen class
         object.__setattr__(self, "lower", lower)
