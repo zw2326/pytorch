@@ -450,7 +450,7 @@ def print_summary_table(data, print_dataframe=False):
                 print(col.ljust(width), f"mean={data[col].mean():.3f}x")
             elif col in ("accuracy"):
                 pass_rate = (data[col] == "pass").mean()
-                print(col.ljust(width), f"pass_rate={100*pass_rate:.2f}%")
+                print(col.ljust(width), f"pass_rate={100 * pass_rate:.2f}%")
             else:
                 cdata = data[col]
                 print(
@@ -1341,9 +1341,7 @@ class AOTInductorModelCache:
                 example_kwargs,
             )
             with torch.no_grad():
-                so_path = torch._inductor.aot_compile(
-                    gm, example_args, example_kwargs
-                )  # type: ignore[arg-type]
+                so_path = torch._inductor.aot_compile(gm, example_args, example_kwargs)  # type: ignore[arg-type]
 
             cls.cache[key] = torch._export.aot_load(so_path, device)
 
@@ -1500,12 +1498,10 @@ class OnnxModel(abc.ABC):
         return model_path
 
     @abc.abstractmethod
-    def format_pt_inputs(self, pt_inputs: Any) -> Sequence[torch.Tensor]:
-        ...
+    def format_pt_inputs(self, pt_inputs: Any) -> Sequence[torch.Tensor]: ...
 
     @abc.abstractmethod
-    def format_pt_outputs(self, pt_outputs: Any) -> Sequence[torch.Tensor]:
-        ...
+    def format_pt_outputs(self, pt_outputs: Any) -> Sequence[torch.Tensor]: ...
 
     def adapt_pt_inputs_to_onnx(self, pt_inputs) -> Mapping[str, np.ndarray]:
         pt_inputs = self.format_pt_inputs(pt_inputs)
@@ -2163,9 +2159,9 @@ def cast_to(dtype, model, inputs):
         model = model.to(dtype)
 
     inputs = tree_map(
-        lambda x: x.to(dtype)
-        if isinstance(x, torch.Tensor) and x.is_floating_point()
-        else x,
+        lambda x: (
+            x.to(dtype) if isinstance(x, torch.Tensor) and x.is_floating_point() else x
+        ),
         inputs,
     )
     return model, inputs
@@ -2600,9 +2596,11 @@ class BenchmarkRunner:
             model = FSDP(
                 model,
                 use_orig_params=True,
-                device_id=torch.cuda.current_device()
-                if self.args.devices[-1] == "cuda"
-                else None,
+                device_id=(
+                    torch.cuda.current_device()
+                    if self.args.devices[-1] == "cuda"
+                    else None
+                ),
                 mixed_precision=mp_policy,
                 limit_all_gathers=True,
                 auto_wrap_policy=self.get_fsdp_auto_wrap_policy(self.args.only),
@@ -2667,9 +2665,11 @@ class BenchmarkRunner:
                 self.init_optimizer(name, current_device, model_fp64.parameters())
                 fp64_outputs = self.run_n_iterations(model_fp64, inputs_fp64)
                 fp64_outputs = tree_map(
-                    lambda x: x.to(torch.float64)
-                    if isinstance(x, torch.Tensor) and x.is_floating_point()
-                    else x,
+                    lambda x: (
+                        x.to(torch.float64)
+                        if isinstance(x, torch.Tensor) and x.is_floating_point()
+                        else x
+                    ),
                     fp64_outputs,
                 )
             except Exception:
@@ -3071,9 +3071,9 @@ class BenchmarkRunner:
                 experiment_kwargs["dynamo_peak_mem"] = dynamo_peak_mem
                 experiment_kwargs["dynamo_stats"] = dynamo_stats
                 if self.args.profile_dynamo_cache_lookup:
-                    experiment_kwargs[
-                        "cache_lookup_latency"
-                    ] = dynamo_cache_lookup_latency
+                    experiment_kwargs["cache_lookup_latency"] = (
+                        dynamo_cache_lookup_latency
+                    )
 
             if experiment.func is speedup_experiment_onnx:
                 experiment = functools.partial(
@@ -3227,9 +3227,9 @@ class BenchmarkRunner:
                 experiment_kwargs["dynamo_peak_mem"] = dynamo_peak_mem
                 experiment_kwargs["dynamo_stats"] = dynamo_stats
                 if self.args.profile_dynamo_cache_lookup:
-                    experiment_kwargs[
-                        "cache_lookup_latency"
-                    ] = dynamo_cache_lookup_latency
+                    experiment_kwargs["cache_lookup_latency"] = (
+                        dynamo_cache_lookup_latency
+                    )
 
             if experiment.func is coverage_experiment:
                 ok, total = Stats.reset_counters()
@@ -4678,7 +4678,7 @@ def run(runner, args, original_dir=None):
         for i, name in enumerate(model_names):
             current_name = name
             if args.progress:
-                print(f"Running model {i+1}/{nmodels}", flush=True)
+                print(f"Running model {i + 1}/{nmodels}", flush=True)
 
             try:
                 timeout = args.timeout

@@ -935,9 +935,11 @@ class CppWrapperCpu(WrapperCodeGen):
     @cache_on_self
     def get_output_refs(self):
         return [
-            f"torch::tensor({x.codegen_reference(self.wrapper_call)})"
-            if isinstance(x, ir.ShapeAsConstantBuffer) and not config.abi_compatible
-            else x.codegen_reference(self.wrapper_call)
+            (
+                f"torch::tensor({x.codegen_reference(self.wrapper_call)})"
+                if isinstance(x, ir.ShapeAsConstantBuffer) and not config.abi_compatible
+                else x.codegen_reference(self.wrapper_call)
+            )
             for x in V.graph.graph_outputs
         ]
 
@@ -1137,9 +1139,11 @@ class CppWrapperCpu(WrapperCodeGen):
             outputs_str = "output_tensors"
         else:
             outputs = [
-                f"output_tensors[{i}]"
-                if self.output_is_tensor[i]
-                else f"output_tensors[{i}].item()"
+                (
+                    f"output_tensors[{i}]"
+                    if self.output_is_tensor[i]
+                    else f"output_tensors[{i}].item()"
+                )
                 for i in range(len(V.graph.graph_outputs))
             ]
             outputs_str = f"[{', '.join(outputs)}]"
@@ -1311,9 +1315,11 @@ class CppWrapperCpu(WrapperCodeGen):
                 # C shim only contains out-variant instead of inplace-variant
                 cpp_kernel_name = cpp_kernel_name.replace("__", "_") + "_out"
             inputs_wrapped = [
-                f"convert_arrayref_tensor_to_tensor({x})"
-                if isinstance(x, str)
-                else str(x)
+                (
+                    f"convert_arrayref_tensor_to_tensor({x})"
+                    if isinstance(x, str)
+                    else str(x)
+                )
                 for x in inputs
             ]
             line = f"{cpp_kernel_name}(convert_arrayref_tensor_to_tensor({output}), {','.join(inputs_wrapped)}"
@@ -2188,7 +2194,7 @@ if (custom_op_wrapper.get() == NULL) {
             py_args_var = f"py_args_{next(self.arg_var_id)}"
             # First arg is always the python op name
             lines = f"""
-RAIIPyObject {py_args_var}(PyTuple_New({num_args+1}));
+RAIIPyObject {py_args_var}(PyTuple_New({num_args + 1}));
 if ({py_args_var}.get() == NULL) {{
     throw std::runtime_error("PyTuple_New {py_args_var} failed");
 }}

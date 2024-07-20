@@ -222,9 +222,9 @@ class CommDebugMode(TorchDispatchMode):
                 "module_type" in self.advanced_module_tracker.module_helper_dict[fqn]
                 and include_ops
             ):
-                json_dict[
-                    "module_type"
-                ] = self.advanced_module_tracker.module_helper_dict[fqn]["module_type"]
+                json_dict["module_type"] = (
+                    self.advanced_module_tracker.module_helper_dict[fqn]["module_type"]
+                )
 
                 if "parameters" in self.advanced_module_tracker.module_helper_dict[fqn]:
                     for (

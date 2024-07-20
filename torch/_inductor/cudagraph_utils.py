@@ -12,6 +12,7 @@ perf_hint_log = torch._logging.getArtifactLogger(__name__, "perf_hints")
 @dataclasses.dataclass(frozen=True)
 class FunctionID:
     "Unique counter of a function wrapped in cudagraphify_impl"
+
     id: int
 
 
@@ -105,7 +106,7 @@ def get_use_stack_trace(node) -> Optional[str]:
 
 
 def check_multiple_devices_or_any_cpu_nodes(
-    device_node_mapping: Dict[torch.device, torch.fx.Node]
+    device_node_mapping: Dict[torch.device, torch.fx.Node],
 ) -> Optional[str]:
     if cpu_node := device_node_mapping.get(torch.device("cpu")):
         msg = f"cpu device ({cpu_node.name})"
@@ -125,7 +126,7 @@ def check_multiple_devices_or_any_cpu_nodes(
 
 
 def check_lowering_disable_cudagraph(
-    device_node_mapping: Dict[torch.device, torch.fx.Node]
+    device_node_mapping: Dict[torch.device, torch.fx.Node],
 ):
     return check_multiple_devices_or_any_cpu_nodes(device_node_mapping)
 
