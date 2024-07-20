@@ -44,7 +44,6 @@ ISORT_SKIPLIST = re.compile(
                     # test/[e-h]*/**
                     # test/i*/**
                     # test/j*/**
-                    "test/j*/**",
                     # test/[k-p]*/**
                     "test/[k-p]*/**",
                     # test/[q-z]*/**
