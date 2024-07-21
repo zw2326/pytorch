@@ -283,6 +283,7 @@ __all__ = [
     "swap_axes",  # alias for transpose
     "squeeze",
     "t",
+    "t_copy",
     "T",
     "take_along_dim",
     "tensor_split",
@@ -6316,6 +6317,15 @@ exponential_ = _make_inplace(exponential)
 geometric_ = _make_inplace(geometric)
 log_normal_ = _make_inplace(log_normal)
 zero_ = _make_inplace(zero)
+
+alias_copy = _make_copy_from_view(aten.alias)
+as_strided_copy = _make_copy_from_view(aten.as_strided)
+diagonal_copy = _make_copy_from_view(aten.diagonal)
+# TODO: This must return a sparse tensor if the input is sparse, but refs have
+# no sparse support. See narrow_copy_sparse in core.
+narrow_copy = _make_copy_from_view(aten.narrow)
+t_copy = _make_copy_from_view(aten.t)
+view_copy = _make_copy_from_view(aten.view)
 
 
 # xref: isStorage in torch/csrc/DynamicTypes.cpp
