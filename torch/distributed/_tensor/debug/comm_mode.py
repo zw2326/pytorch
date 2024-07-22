@@ -2,14 +2,11 @@
 import copy
 import json
 import re
-
 from collections import defaultdict
 from typing import Any, Dict
 
 import torch
-
 import torch.nn
-
 from torch.autograd.graph import register_multi_grad_hook
 from torch.distributed._tensor.api import DTensor
 from torch.nn.modules.module import (
@@ -21,10 +18,9 @@ from torch.utils._python_dispatch import TorchDispatchMode
 from torch.utils._pytree import tree_flatten
 from torch.utils.module_tracker import ModuleTracker
 
+
 funcol_native = torch.ops._c10d_functional
 funcol_py = torch.ops.c10d_functional
-from torch._guards import detect_fake_mode
-
 funcol_autograd = torch.ops._c10d_functional_autograd
 c10d_ops = torch.ops.c10d
 
