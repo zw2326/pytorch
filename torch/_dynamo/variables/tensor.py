@@ -24,6 +24,7 @@ from torch.fx.experimental.symbolic_shapes import (
     SymTypes,
 )
 from torch.utils._python_dispatch import is_traceable_wrapper_subclass
+
 from .. import config, variables
 from .._trace_wrapped_higher_order_op import trace_wrapped
 from ..exc import unimplemented, UserError, UserErrorType
@@ -45,6 +46,7 @@ from ..utils import (
 from .base import VariableTracker
 from .constant import ConstantVariable
 from .lists import SizeVariable
+
 
 try:
     import numpy as np

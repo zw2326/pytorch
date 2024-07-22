@@ -24,6 +24,7 @@ from ..utils import (
 from .base import MutableLocal, typestr, VariableTracker
 from .constant import ConstantVariable
 
+
 if TYPE_CHECKING:
     from torch._guards import Source
 

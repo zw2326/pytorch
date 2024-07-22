@@ -23,9 +23,9 @@ from typing_extensions import ParamSpec
 from weakref import ReferenceType
 
 from torch._utils_internal import maybe_upload_prof_stats_to_manifold
-
 from torch.fx._lazy_graph_module import _use_lazy_graph_module
 from torch.utils._traceback import CapturedTraceback
+
 
 np: Optional[ModuleType]
 try:
@@ -101,6 +101,7 @@ from .utils import (
     troubleshooting_url,
     write_record_to_file,
 )
+
 
 if typing.TYPE_CHECKING:
     from .backends.registry import CompilerFn
@@ -528,6 +529,7 @@ def convert_frame_assert(
 from collections import OrderedDict
 
 from torch.utils.hooks import RemovableHandle
+
 
 if typing.TYPE_CHECKING:
     from .output_graph import OutputGraph

@@ -44,6 +44,7 @@ import torch.utils.checkpoint
 from torch import _guards
 from torch._utils_internal import justknobs_check, log_export_usage
 from torch.export.dynamic_shapes import _process_dynamic_shapes
+from torch.fx import GraphModule
 from torch.fx.experimental.proxy_tensor import make_fx, maybe_disable_fake_tensor_mode
 from torch.fx.experimental.symbolic_shapes import (
     ConstraintViolationError,
@@ -53,10 +54,9 @@ from torch.fx.experimental.symbolic_shapes import (
 )
 from torch.fx.graph import _PyTreeCodeGen, _PyTreeInfo
 
-from ..fx import GraphModule
 from .backends.registry import CompilerFn, lookup_backend
-
 from .hooks import Hooks
+
 
 # see discussion at https://github.com/pytorch/pytorch/issues/120699
 reset_code = torch._C._dynamo.eval_frame.reset_code  # noqa: F401
@@ -71,9 +71,11 @@ from .exc import CondOpArgsMismatchError, UserError, UserErrorType
 from .mutation_guard import install_generation_tagging_init
 from .utils import common_constant_types, compile_times
 
+
 log = logging.getLogger(__name__)
 
 from torch._dispatch.python import enable_python_dispatcher
+
 
 always_optimize_code_objects = utils.ExactWeakKeyDictionary()
 null_context = contextlib.nullcontext
@@ -81,8 +83,10 @@ null_context = contextlib.nullcontext
 
 import sympy
 
+
 if TYPE_CHECKING:
     from torch._subclasses import fake_tensor
+
     from .types import CacheEntry, DynamoCallback
 
 
@@ -1616,7 +1620,7 @@ class TorchPatcher:
         )
         torch.distributions.Distribution.set_default_validate_args(False)
 
-        from ..optim import (
+        from torch.optim import (
             adadelta,
             adagrad,
             adam,

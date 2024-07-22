@@ -52,7 +52,8 @@ from typing import (
 )
 from typing_extensions import TypeGuard
 
-from ..utils.hooks import RemovableHandle
+from torch.utils.hooks import RemovableHandle
+
 
 T = TypeVar("T")
 
@@ -66,6 +67,7 @@ try:
     import torch._numpy as tnp
     from torch._guards import detect_fake_mode  # noqa: F401n
     from torch._logging import LazyString
+
     from . import config
 
     # NOTE: Make sure `NP_SUPPORTED_MODULES` and `NP_TO_TNP_MODULE` are in sync.
@@ -103,7 +105,6 @@ from torch._dispatch.python import enable_python_dispatcher
 from torch._guards import TracingContext
 from torch._subclasses.meta_utils import is_sparse_compressed
 from torch._utils_internal import log_compilation_event
-
 from torch.fx._utils import _format_graph_code, lazy_format_graph_code
 from torch.nn.modules.lazy import LazyModuleMixin
 from torch.utils._triton import has_triton, has_triton_package
@@ -1807,6 +1808,7 @@ def get_fake_value(node, tx, allow_non_graph_fake=False):
         by further wrapping them as this graph's fakes.
     """
     from torch.utils._sympy.value_ranges import ValueRangeError
+
     from .exc import (
         TorchRuntimeError,
         unimplemented,
@@ -2360,6 +2362,7 @@ def is_utils_checkpoint(obj):
 
 def build_checkpoint_variable(**options):
     import torch._higher_order_ops.wrap as higher_order_ops
+
     from .variables.higher_order_ops import TorchHigherOrderOperatorVariable
 
     # TODO - This is a temporary situation where we have two versions of
