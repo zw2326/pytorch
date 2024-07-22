@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import torch
 import torch.fx
-
 from torch.onnx._internal.fx import _pass
 
 
