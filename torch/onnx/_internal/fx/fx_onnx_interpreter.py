@@ -462,7 +462,7 @@ class FxOnnxInterpreter:
                 onnxfunction_dispatcher,
                 op_level_debug,
             )
-        elif node.op == "output":
+        elif node.op ==  "output":
             self.output(node, onnxscript_graph, fx_name_to_onnxscript_value)
         else:
             raise RuntimeError(f"Found node type not defined in torch.fx: {node.op}")
