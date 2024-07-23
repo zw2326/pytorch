@@ -258,7 +258,7 @@ Tensor& linspace_out_mps(const Scalar& start, const Scalar& end, int64_t steps, 
       runMPSGraph(stream, cachedGraph->graph(), feeds, outputPlaceholder);
     }
 
-    if (!result.contiguous()) {
+    if (!result.is_contiguous()) {
       result.copy_(r);
     }
   }
