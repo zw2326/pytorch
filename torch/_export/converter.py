@@ -23,6 +23,10 @@ from torch.onnx.utils import _create_jit_graph
 log = logging.getLogger(__name__)
 
 
+def append_to_immutable_list(container, element):
+    return container + [element]
+
+
 def inplace_optimize_sym_size_div(gm: torch.fx.GraphModule):
     def pattern(im, dim, scale):
         sym_size_int = torch.ops.aten.sym_size.int(im, dim)
@@ -421,6 +425,15 @@ class TS2FXGraphConverter:
         fx_node = self.fx_graph.get_attr(alias_name)
         self.name_to_node[output_name] = fx_node
         self.name_to_tensor_constants[alias_name] = tensor
+
+    def convert_aten_append(self, node: torch._C.Node):
+        inp_list = list(node.inputs())
+        inp_value_list = [self.get_fx_value(inp) for inp in inp_list]
+        fx_node = self.fx_graph.call_function(
+            append_to_immutable_list, tuple(inp_value_list)
+        )
+        self.name_to_node[node.output().debugName()] = fx_node
+        self.name_to_node[inp_list[0].debugName()] = fx_node
 
     def convert_prim_Constant(self, node: torch._C.Node):
         name = node.output().debugName()
