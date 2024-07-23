@@ -328,7 +328,7 @@ def _fill_in_default_kwargs(
                 # Get default from schema.
                 complete_kwargs[expected_arg.name] = expected_arg.default_value
 
-    return complete_args, complete_kwargs
+    return complete_args,  complete_kwargs
 
 
 def _wrap_fx_args_as_onnxscript_args(
