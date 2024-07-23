@@ -71,6 +71,12 @@ on:
         required: false
         type: boolean
         default: false
+      triton-version:
+        required: false
+        type: string
+        default: ""
+        description: |
+          Hash of triton used for the build. If not provided, the default version found in .ci/docker/triton_version.txt will be used.
 
     secrets:
       HUGGING_FACE_HUB_TOKEN:
@@ -190,6 +196,7 @@ jobs:
           OUR_GITHUB_JOB_ID: ${{ steps.get-job-id.outputs.job-id }}
           HUGGING_FACE_HUB_TOKEN: ${{ secrets.HUGGING_FACE_HUB_TOKEN }}
           USE_SPLIT_BUILD: ${{ inputs.use_split_build }}
+          CUSTOM_TRITON_VERSION_COMMIT: ${{ inputs.triton-version }}
         run: |
           # detached container should get cleaned up by teardown_ec2_linux
           container_name=$(docker run \
@@ -209,6 +216,7 @@ jobs:
             -e OUR_GITHUB_JOB_ID \
             -e HUGGING_FACE_HUB_TOKEN \
             -e USE_SPLIT_BUILD \
+            -e CUSTOM_TRITON_VERSION_COMMIT \
             --env-file="/tmp/github_env_${GITHUB_RUN_ID}" \
             --security-opt seccomp=unconfined \
             --cap-add=SYS_PTRACE \
