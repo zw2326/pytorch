@@ -39,9 +39,9 @@ id<MTLLibrary> MPSDevice::getMetalIndexingLibrary() {
     [options setLanguageVersion:getMetalLanguageVersion(_mtl_device, isMacOS13Plus(MacOSVersion::MACOS_VER_13_0_PLUS))];
 
     if ([options respondsToSelector:@selector(mathMode)]) {
-        options.mathMode = MTLMathModeFast;
+      options.mathMode = MTLMathModeFast;
     } else {
-        [options setFastMathEnabled:YES];
+      [options setFastMathEnabled:YES];
     }
 
     _mtl_indexing_library = [_mtl_device newLibraryWithSource:[NSString stringWithCString:mps::indexing_metal_shaders
