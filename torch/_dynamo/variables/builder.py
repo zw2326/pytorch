@@ -2632,6 +2632,8 @@ class SourcelessBuilder:
             return DeviceMeshVariable(value)
         elif isinstance(value, re.Pattern):
             return RegexPatternVariable(value)
+        elif inspect.isclass(type(value)):
+            return UserDefinedObjectVariable(value)
         unimplemented(
             f"Unexpected type in sourceless builder {value_type.__module__}.{value_type.__qualname__}"
         )
