@@ -1,4 +1,6 @@
-# mypy: allow-untyped-defs
+# mypy: allow-untyped-decorators
+from __future__ import annotations
+
 import collections
 import cProfile
 import dis
