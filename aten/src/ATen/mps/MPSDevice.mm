@@ -37,11 +37,13 @@ id<MTLLibrary> MPSDevice::getMetalIndexingLibrary() {
   if (!_mtl_indexing_library) {
     MTLCompileOptions* options = [MTLCompileOptions new];
     [options setLanguageVersion:getMetalLanguageVersion(_mtl_device, isMacOS13Plus(MacOSVersion::MACOS_VER_13_0_PLUS))];
-#if defined(__MAC_15_0)
-    options.mathMode = MTLMathModeFast;
-#else
-    [options setFastMathEnabled:YES];
-#endif
+
+    if ([options respondsToSelector:@selector(setFastMathEnabled)]) {
+        [options setFastMathEnabled:YES];
+    } else {
+        options.mathMode = MTLMathModeFast;
+    }
+
     _mtl_indexing_library = [_mtl_device newLibraryWithSource:[NSString stringWithCString:mps::indexing_metal_shaders
                                                                                  encoding:NSASCIIStringEncoding]
                                                       options:options

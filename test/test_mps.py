@@ -4065,8 +4065,13 @@ class TestMPS(TestCaseMPS):
 
     # See https://github.com/pytorch/pytorch/issues/82663
     def test_bool_expand(self):
+        x = torch.tensor([[1], [0]], dtype=torch.bool, device='mps')
+        y = torch.tensor([0, 1], dtype=torch.bool, device='mps')
+        self.assertFalse(torch.equal(x.expand(2, 2), y.expand(2, 2)))
+
+    def test_int_expand(self):
         x = torch.tensor([[1], [0]], dtype=torch.int8, device='mps')
-        y = torch.tensor([0, 1], dtype=torch.int8, device='mps')
+        y = torch.tensor([0, 1], dtype=torch.int8py, device='mps')
         self.assertFalse(torch.equal(x.expand(2, 2), y.expand(2, 2)))
 
     # Empty unary op should return tensor of the same size

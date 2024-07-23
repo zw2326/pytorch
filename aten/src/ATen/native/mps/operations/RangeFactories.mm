@@ -99,8 +99,8 @@ Tensor& arange_mps_out(const Scalar& start, const Scalar& end, const Scalar& ste
       return;
     }
 
-    bool is_contiguous = !mps::needsGather(result);
-    Tensor r = !is_contiguous ? at::empty_like(result, LEGACY_CONTIGUOUS_MEMORY_FORMAT) : result;
+    bool needs_gather = !mps::needsGather(result);
+    Tensor r = !needs_gather ? at::empty_like(result, LEGACY_CONTIGUOUS_MEMORY_FORMAT) : result;
     using namespace mps;
     auto cache_ = MPSGraphCache::getInstance();
     auto stream = getCurrentMPSStream();
@@ -124,7 +124,7 @@ Tensor& arange_mps_out(const Scalar& start, const Scalar& end, const Scalar& ste
       runMPSGraph(stream, cachedGraph->graph(), feeds, outputPlaceholder);
     }
 
-    if (!is_contiguous) {
+    if (!needs_gather) {
       result.copy_(r);
     }
   });
@@ -166,8 +166,8 @@ Tensor& range_mps_out(const Scalar& start, const Scalar& end, const Scalar& step
     if (numel != size) {
       result.resize_({size});
     }
-    bool is_contiguous = !mps::needsGather(result);
-    Tensor r = !is_contiguous ? at::empty_like(result, LEGACY_CONTIGUOUS_MEMORY_FORMAT) : result;
+    bool needs_gather = !mps::needsGather(result);
+    Tensor r = !needs_gather ? at::empty_like(result, LEGACY_CONTIGUOUS_MEMORY_FORMAT) : result;
     using namespace mps;
     auto cache_ = MPSGraphCache::getInstance();
     auto stream = getCurrentMPSStream();
@@ -191,7 +191,7 @@ Tensor& range_mps_out(const Scalar& start, const Scalar& end, const Scalar& step
       runMPSGraph(stream, cachedGraph->graph(), feeds, outputPlaceholder);
     }
 
-    if (!is_contiguous) {
+    if (!needs_gather) {
       result.copy_(r);
     }
   });
@@ -258,7 +258,7 @@ Tensor& linspace_out_mps(const Scalar& start, const Scalar& end, int64_t steps, 
       runMPSGraph(stream, cachedGraph->graph(), feeds, outputPlaceholder);
     }
 
-    if (!result.is_contiguous()) {
+    if (!result.needs_gather()) {
       result.copy_(r);
     }
   }
