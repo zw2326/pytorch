@@ -3573,7 +3573,7 @@ def forward(self, tangents_1):
         class MyModel(torch.nn.Module):
             def __init__(self):
                 super().__init__()
-                self.register_buffer("buf", torch.zeros(1))
+                self.buf = torch.nn.Buffer(torch.zeros(1))
                 self.w1 = torch.nn.Parameter(torch.zeros(1))
                 self.w2 = torch.nn.Parameter(torch.zeros(1))
 
@@ -3628,7 +3628,7 @@ def forward(self, primals_1, primals_2, primals_3, primals_4):
         class MyModel(torch.nn.Module):
             def __init__(self):
                 super().__init__()
-                self.register_buffer("buf", torch.ones(4, 4))
+                self.buf = torch.nn.Buffer(torch.ones(4, 4))
                 self.w = torch.nn.Parameter(
                     torch.Tensor([[4, 5], [1, 2], [6, 7], [8, 9]])
                 )
@@ -4208,7 +4208,7 @@ def forward(self, arg0_1, arg1_1):
         class Foo(torch.nn.Module):
             def __init__(self):
                 super().__init__()
-                self.register_buffer("foo", torch.zeros(2, 2))
+                self.foo = torch.nn.Buffer(torch.zeros(2, 2))
 
             def forward(self, x):
                 self.foo.add_(4)
