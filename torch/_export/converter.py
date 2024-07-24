@@ -314,7 +314,12 @@ class TS2FXGraphConverter:
                 lambda node: self._convert_standard_operators(node),
             )
 
-        self.name_update_from_subblock_to_parent = []
+        # This stores a list of return results that do not appear in the original TS
+        # graph's outputs. The reason we maintain this is because some operations in the sub-block
+        # might have inplace updates to the variable defined in the parent fx graph. After
+        # the execution of that sub-block, the variable defined in the parent fx graph also
+        # needs to be updated.
+        self.name_update_from_subblock_to_parent: List[str] = []
 
     def _convert_block_to_subgraph(self, node: torch._C.Node, arguments: List[str]):
         subgraph_nodes, subgraph_converters = [], []
@@ -790,13 +795,17 @@ class TS2FXGraphConverter:
         subgraph_converter = subgraph_converters[0]
 
         def execute_node(*args, **kwargs):
-            node_func = args[0]
-            iter_idx = args[1]
+            node_func = args[0]  # The subgraph.
+            iter_idx = args[1]  # The index.
+            # Loop local variables. TS graph create those as inputs because their values
+            # are updated inside the loop.
             loop_local_args = args[2 : 2 + len(loop_local_arguments)]
+            # Global variables that are not passed in as inputs to the loop sub-blocks
+            # but are directly used. Most of time, their values are not updated, but
+            # the only exception is when there are some operations that perform inplace
+            # updates.
             global_args = args[2 + len(loop_local_arguments) :]
-            return node_func(
-                *global_args, iter_idx, *loop_local_args, **kwargs
-            )
+            return node_func(*global_args, iter_idx, *loop_local_args, **kwargs)
 
         fx_block_args = [
             self.get_fx_value_by_fqn(name)
@@ -805,9 +814,12 @@ class TS2FXGraphConverter:
         for iter_idx in range(num_iterations):
             loop_node = self.fx_graph.call_function(
                 execute_node,
+                # Check execute_node function for the expected arguments order.
                 tuple([subgraph_nodes[0], iter_idx] + fx_block_args),
                 {},
             )
+
+            # Update the value of loop local variables.
             if node.outputsSize() >= 1:
                 for i, outp in enumerate(node.outputs()):
                     output_name = outp.debugName()
@@ -819,6 +831,8 @@ class TS2FXGraphConverter:
                         ),  # + 1 because the 0th element is the condition.
                     )
                     fx_block_args[i] = self.name_to_node[output_name]
+
+            # Update the value of global variables, whose values are modified inplace.
             for i, name in enumerate(
                 subgraph_converter.name_update_from_subblock_to_parent
             ):
@@ -830,7 +844,9 @@ class TS2FXGraphConverter:
                     ),  # + 1 because the 0th element is the condition.
                 )
                 global_argument_index = global_arguments.index(name)
-                fx_block_args[i + node.outputsSize() + global_argument_index] = self.name_to_node[name]
+                fx_block_args[
+                    i + node.outputsSize() + global_argument_index
+                ] = self.name_to_node[name]
 
     def _check_set_attr_in_if_block(self, if_node: torch._C.Node):
         for block in if_node.blocks():
