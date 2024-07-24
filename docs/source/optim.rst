@@ -122,8 +122,12 @@ Base class
 
     Optimizer.add_param_group
     Optimizer.load_state_dict
+    Optimizer.register_load_state_dict_pre_hook
+    Optimizer.register_load_state_dict_post_hook
     Optimizer.state_dict
     Optimizer.step
+    Optimizer.register_step_pre_hook
+    Optimizer.register_step_post_hook
     Optimizer.zero_grad
 
 Algorithms
