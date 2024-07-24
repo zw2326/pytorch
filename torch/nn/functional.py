@@ -5688,6 +5688,8 @@ Note:
     The c++ implementation supports torch.float64 and can be used when higher precision is required.
     For more information please see :doc:`/notes/numerical_accuracy`
 
+    For math backend, all intermediates are kept in torch.float if inputs are in torch.half or torch.bfloat16.
+
 Note:
     {cudnn_reproducibility_note}
 """.format(
