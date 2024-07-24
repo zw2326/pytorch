@@ -1604,23 +1604,42 @@ class VariableBuilder:
                 return ConstantVariable.create(value=value, source=self.source)
 
             name = self.source.name()
-            if name not in self.tx.output.frame_state:
-                # Note - this essentially means that if this name gets reused as a tensor,
-                # it will start fully dynamic. That should always be a safe option, and not awfully inefficient.
-                # Alternatively, if we want to improve pef here, we can add a third state of unset, but I am not
-                # sure that is necessary for now.
-                frame_state_entry = FrameStateSizeEntry(scalar=value, size=None)
-            else:
-                frame_state_entry = self.tx.output.frame_state[name]
-                if frame_state_entry.scalar != value:
-                    log.debug(
-                        "automatic dynamic int %s val %s != %s",
-                        name,
-                        value,
-                        frame_state_entry.scalar,
+
+            def update_frame_state(value):
+                if name not in self.tx.output.frame_state:
+                    # Note - this essentially means that if this name gets reused as a tensor,
+                    # it will start fully dynamic. That should always be a safe option, and not awfully inefficient.
+                    # Alternatively, if we want to improve pef here, we can add a third state of unset, but I am not
+                    # sure that is necessary for now.
+                    frame_state_entry = FrameStateSizeEntry(
+                        scalar=value, size=None, stride=None
                     )
-                    frame_state_entry.scalar = None
-            self.tx.output.frame_state[name] = frame_state_entry
+                else:
+                    frame_state_entry = self.tx.output.frame_state[name]
+                    if frame_state_entry.scalar != value:
+                        log.debug(
+                            "automatic dynamic int %s val %s != %s",
+                            name,
+                            value,
+                            frame_state_entry.scalar,
+                        )
+                        frame_state_entry.scalar = None
+                self.tx.output.frame_state[name] = frame_state_entry
+
+            if (st := self.tx.distributed_state) is None:
+                update_frame_state(value)
+                frame_state_entry = self.tx.output.frame_state[name]
+            elif st.all_states is None:
+                # Preflight, always pretend as if it's static
+                frame_state_entry = FrameStateSizeEntry(
+                    size=None, scalar=value, stride=None
+                )
+                st.local_state.input_sizes[name] = value
+            else:
+                # Apply the updates
+                for sub_state in st.all_states:
+                    update_frame_state(sub_state.input_sizes[name])
+                frame_state_entry = self.tx.output.frame_state[name]
 
             # TODO: This should be dynamic, as we in general do not
             # know if bare integers are actually going to be sizevars
@@ -2285,7 +2304,52 @@ def _automatic_dynamic(
                             e.size(i),
                             dim,
                         )
-                        frame_state_entry.size[i] = None
+
+                    # We want to trigger automatic dynamism when strides change, but we have to think whether stride should
+                    # be INFER_STRIDE or DYNAMIC.
+                    #
+                    # Case 1: if strides change because of size changes, we might not want to allocate a new symbol for
+                    # stride. Lets say we have a tensor (10, 20) and we mark the dim=1 dynamic for size. Resulting size will
+                    # be (10, s0) and stride can be either (s0, 1) or (s1, 1). In most cases, (s0, 1) is preferred because
+                    # users are not changing both size and stride.
+                    #
+                    # Case 2: But for another case, lets suppose the size remains same between the two invocations but stride
+                    # change. In this case, we definitely want to mark the changing stride to be DYNAMIC.
+
+                    # Here, we use a hueristic to simplify determination of dynamic stride. For case 1, we will always
+                    # assume that stride will be inferred (INFER_STRIDE). This might be suboptimal, where user is doing something
+                    # arbitrary size and stride resizing, and we fail to trigger dynamism, but we have not seen any cases
+                    # yet. For case 2, we will mark the changing dimensions DYNAMIC.
+                    if not has_size_changed:
+                        for i, dim in enumerate(frame_state_entry.stride):
+                            if dim is not None and stride[i] != dim:
+                                log.debug(
+                                    "automatic dynamic %s stride(%s) %s != %s",
+                                    name,
+                                    i,
+                                    e.stride(i),
+                                    dim,
+                                )
+                                frame_state_entry.stride[i] = None
+        tx.output.frame_state[name] = frame_state_entry
+
+    if (st := tx.distributed_state) is None:
+        update_frame_state(e.size(), e.stride())
+        frame_state_entry = tx.output.frame_state[name]
+    elif st.all_states is None:
+        # Preflight, always pretend as if it's static
+        frame_state_entry = FrameStateSizeEntry(
+            size=e.size(), scalar=None, stride=e.stride()
+        )
+        st.local_state.input_sizes[name] = list(e.size())
+        st.local_state.input_strides[name] = list(e.stride())
+    else:
+        # Apply the updates
+        for sub_state in st.all_states:
+            update_frame_state(
+                sub_state.input_sizes[name], sub_state.input_strides[name]
+            )
+        frame_state_entry = tx.output.frame_state[name]
 
     # TODO: index export_constraints ahead of time so we don't have to
     # do a linear scan every time here
