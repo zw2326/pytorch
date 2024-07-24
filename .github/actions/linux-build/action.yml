@@ -25,11 +25,6 @@ inputs:
     required: false
     default: "5.2"
     description: Runner label to select worker type
-  runner:
-    required: false
-    default: "linux.2xlarge"
-    description: |
-      List of CUDA architectures CI build should target.
   test-matrix:
     required: false
     type: string
@@ -52,13 +47,6 @@ inputs:
     description: Hugging Face Hub token
     required: false
     default: ""
-  use_split_build:
-    description: |
-      [Experimental] Build a libtorch only wheel and build pytorch such that
-      are built from the libtorch wheel.
-    required: false
-    type: boolean
-    default: false
 outputs:
   docker-image:
     value: ${{ steps.calculate-docker-image.outputs.docker-image }}
@@ -70,8 +58,15 @@ outputs:
 runs:
   using: composite
   steps:
+    # [pytorch repo ref]
+    # Use a pytorch/pytorch reference instead of a reference to the local
+    # checkout because when we run this action we don't *have* a local
+    # checkout. In other cases you should prefer a local checkout.
+    - name: Checkout PyTorch
+      uses: pytorch/pytorch/.github/actions/checkout-pytorch@main
+        
     - name: Setup Linux
-      uses: ./.github/actions/setup-linux
+      uses: pytorch/pytorch/.github/actions/setup-linux@main
 
     - name: configure aws credentials
       uses: aws-actions/configure-aws-credentials@v3
@@ -109,7 +104,7 @@ runs:
 
     - name: Get workflow job id
       id: get-job-id
-      uses: ./.github/actions/get-workflow-job-id
+      uses: pytorch/pytorch/.github/actions/get-workflow-job-id@main
       if: always()
       with:
         github-token: ${{ inputs.GITHUB_TOKEN }}
@@ -117,14 +112,14 @@ runs:
     # Apply the filter logic to the build step too if the test-config label is already there
     - name: Select all requested test configurations (if the test matrix is available)
       id: filter
-      uses: ./.github/actions/filter-test-configs
+      uses: pytorch/pytorch/.github/actions/filter-test-configs@main
       with:
         github-token: ${{ inputs.GITHUB_TOKEN }}
         test-matrix: ${{ inputs.test-matrix }}
         job-name: ${{ steps.get-job-id.outputs.job-name }}
 
     - name: Download pytest cache
-      uses: ./.github/actions/pytest-cache-download
+      uses: pytorch/pytorch/.github/actions/pytest-cache-download@main
       continue-on-error: true
       with:
         cache_dir: .pytest_cache
@@ -151,7 +146,6 @@ runs:
         DEBUG: ${{ inputs.build-with-debug == 'true' && '1' || '0' }}
         OUR_GITHUB_JOB_ID: ${{ steps.get-job-id.outputs.job-id }}
         HUGGING_FACE_HUB_TOKEN: ${{ inputs.HUGGING_FACE_HUB_TOKEN }}
-        USE_SPLIT_BUILD: ${{ inputs.use_split_build }}
       shell: bash
       run: |
         # detached container should get cleaned up by teardown_ec2_linux
@@ -171,7 +165,6 @@ runs:
           -e PR_LABELS \
           -e OUR_GITHUB_JOB_ID \
           -e HUGGING_FACE_HUB_TOKEN \
-          -e USE_SPLIT_BUILD \
           --env-file="/tmp/github_env_${GITHUB_RUN_ID}" \
           --security-opt seccomp=unconfined \
           --cap-add=SYS_PTRACE \
@@ -192,19 +185,9 @@ runs:
 
     - name: Store PyTorch Build Artifacts on S3
       uses: seemethere/upload-artifact-s3@v5
-      if: inputs.build-generates-artifacts == 'true' && steps.build.outcome != 'skipped' && inputs.use_split_build != 'true'
+      if: inputs.build-generates-artifacts == 'true' && steps.build.outcome != 'skipped'
       with:
         name: ${{ inputs.build-environment }}
-        retention-days: 14
-        if-no-files-found: error
-        path: artifacts.zip
-        s3-bucket: ${{ inputs.s3-bucket }}
-
-    - name: Store PyTorch Build Artifacts on S3 for split build
-      uses: seemethere/upload-artifact-s3@v5
-      if: inputs.build-generates-artifacts == 'true' && steps.build.outcome != 'skipped' && inputs.use_split_build == 'true'
-      with:
-        name: ${{ inputs.build-environment }}-experimental-split-build
         retention-days: 14
         if-no-files-found: error
         path: artifacts.zip
