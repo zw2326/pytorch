@@ -132,7 +132,7 @@ BW = FULL_BACKWARD
 
 # Helper to parse an action string like 1F0 into a tuple of (stage_index, computation_type, microbatch_index)
 _action_regex = re.compile(
-    r"(\d+)(F|B|W|BW|UNSHARD|RESHARD|SEND_F|RECV_F|SEND_B|RECV_B){0,1}(\d*)(_(\d*)(RECV_B|RECV_F)(\d)){0,1}"
+    r"(\d+)(F|BW|B|W|UNSHARD|RESHARD|SEND_F|RECV_F|SEND_B|RECV_B){0,1}(\d*)(_(\d*)(RECV_B|RECV_F)(\d)){0,1}"
 )
 
 
@@ -944,6 +944,40 @@ def _add_unshard_reshard(
         unshard_actions.append(action)
 
     return unshard_actions
+
+
+def _merge_bw(
+    compute_actions: List[Optional[_Action]],
+) -> List[_Action]:
+    """Given a basic schedule involving only compute actions (F,B,W), merge adjacent B and W ops into BW ops.
+
+    BW refers to running the whole backward (not separating grad_input and grad_weight), which can be more efficient
+    in some cases.
+    """
+    merged_actions = []
+    while compute_actions:
+        action = compute_actions.pop(0)
+        if action is None:
+            continue
+
+        while len(compute_actions) and (next_action := compute_actions[0]) is None:
+            # remove any None actions between 'action' and 'next_action'
+            compute_actions.pop(0)
+
+        if (
+            action.computation_type == B
+            and next_action is not None
+            and next_action.computation_type == W
+            and action.stage_index == next_action.stage_index
+            and action.microbatch_index == next_action.microbatch_index
+        ):
+            merged_actions.append(
+                _Action(action.stage_index, BW, action.microbatch_index)
+            )
+            compute_actions.pop(0)
+        else:
+            merged_actions.append(action)
+    return merged_actions
 
 
 def _batch_send_recv(ops, peer_ops):
