@@ -339,7 +339,7 @@ inline __device__ void compute_attn_1rowblock(const Params &params, const int bi
 
         // Reshape rP from (MMA=4, MMA_M, MMA_N) to ((4, 2), MMA_M, MMA_N / 2)
         // if using m16n8k16 or (4, MMA_M, MMA_N) if using m16n8k8.
-        Tensor tOrP = make_tensor(rP.data(), pytorch_flash::convert_layout_acc_Aregs<Kernel_traits::TiledMma>(rP.layout()));
+        Tensor tOrP = make_tensor(rP.data(), pytorch_flash::convert_layout_acc_Aregs<typename Kernel_traits::TiledMma>(rP.layout()));
         // if (cute::thread0()) { print(tOrP); }
         pytorch_flash::gemm_rs(acc_o, tOrP, tOrVt, tOsVt, tiled_mma, smem_tiled_copy_V, smem_thr_copy_V);
         // if (cute::thread0()) { print(scores); }
@@ -402,7 +402,7 @@ inline __device__ void compute_attn_1rowblock(const Params &params, const int bi
 
         // Reshape rP from (MMA=4, MMA_M, MMA_N) to ((4, 2), MMA_M, MMA_N / 2)
         // if using m16n8k16 or (4, MMA_M, MMA_N) if using m16n8k8.
-        Tensor tOrP = make_tensor(rP.data(), pytorch_flash::convert_layout_acc_Aregs<Kernel_traits::TiledMma>(rP.layout()));
+        Tensor tOrP = make_tensor(rP.data(), pytorch_flash::convert_layout_acc_Aregs<typename Kernel_traits::TiledMma>(rP.layout()));
         pytorch_flash::gemm_rs(acc_o, tOrP, tOrVt, tOsVt, tiled_mma, smem_tiled_copy_V, smem_thr_copy_V);
     }
 
@@ -895,7 +895,7 @@ inline __device__ void compute_attn_1rowblock_splitkv(const Params &params, cons
         Tensor rP = pytorch_flash::convert_type<Element>(acc_s);
         // Reshape rP from (MMA=4, MMA_M, MMA_N) to ((4, 2), MMA_M, MMA_N / 2)
         // if using m16n8k16 or (4, MMA_M, MMA_N) if using m16n8k8.
-        Tensor tOrP = make_tensor(rP.data(), pytorch_flash::convert_layout_acc_Aregs<Kernel_traits::TiledMma>(rP.layout()));
+        Tensor tOrP = make_tensor(rP.data(), pytorch_flash::convert_layout_acc_Aregs<typename Kernel_traits::TiledMma>(rP.layout()));
 
         pytorch_flash::gemm_rs(acc_o, tOrP, tOrVt, tOsVt, tiled_mma, smem_tiled_copy_V, smem_thr_copy_V);
 
@@ -957,7 +957,7 @@ inline __device__ void compute_attn_1rowblock_splitkv(const Params &params, cons
         Tensor rP = pytorch_flash::convert_type<Element>(acc_s);
         // Reshape rP from (MMA=4, MMA_M, MMA_N) to ((4, 2), MMA_M, MMA_N / 2)
         // if using m16n8k16 or (4, MMA_M, MMA_N) if using m16n8k8.
-        Tensor tOrP = make_tensor(rP.data(), pytorch_flash::convert_layout_acc_Aregs<Kernel_traits::TiledMma>(rP.layout()));
+        Tensor tOrP = make_tensor(rP.data(), pytorch_flash::convert_layout_acc_Aregs<typename Kernel_traits::TiledMma>(rP.layout()));
 
         pytorch_flash::gemm_rs(acc_o, tOrP, tOrVt, tOsVt, tiled_mma, smem_tiled_copy_V, smem_thr_copy_V);
     }
@@ -1077,6 +1077,12 @@ inline __device__ void compute_attn_splitkv(const Params &params) {
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 
+template <typename T>
+constexpr T ceil_div(T numerator, T denominator) {
+    return (numerator + denominator - 1) / denominator;
+}
+
+
 template<typename Kernel_traits, int kBlockM, int Log_max_splits, bool Is_even_K, typename Params>
 inline __device__ void combine_attn_seqk_parallel(const Params &params) {
     using Element = typename Kernel_traits::Element;
@@ -1104,8 +1110,7 @@ inline __device__ void combine_attn_seqk_parallel(const Params &params) {
                                    make_stride(params.b * params.h * params.seqlen_q, _1{}));
     Tensor gLSE = make_tensor(make_gmem_ptr(reinterpret_cast<ElementAccum *>(params.softmax_lse_ptr) + row_offset_lse),
                               Shape<Int<kBlockM>>{}, Stride<_1>{});
-    constexpr int kNLsePerThread = (kMaxSplits * kBlockM + kNThreads - 1) / kNThreads;
-
+    constexpr int kNLsePerThread = ceil_div(kMaxSplits * kBlockM, kNThreads);
     // Read the LSE values from gmem and store them in shared memory, then tranpose them.
     constexpr int kRowsPerLoadLSE = kNThreads / kBlockM;
     #pragma unroll
@@ -1150,8 +1155,17 @@ inline __device__ void combine_attn_seqk_parallel(const Params &params) {
     // For the case where all local lse == -INFINITY, we want to set lse_logsum to INFINITY. Otherwise
     // lse_logsum is log(0.0) = -INFINITY and we get NaN when we do lse_accum(l) - lse_logsum.
     ElementAccum lse_logsum = (lse_sum == 0.f || lse_sum != lse_sum) ? INFINITY : logf(lse_sum) + lse_max;
-    // if (bidx == 0 && tidx < 32) { printf("tidx = %d, lse = %f, lse_max = %f, lse_logsum = %f\n", tidx, lse_accum(0), lse_max, lse_logsum); }
-    if (tidx % kRowsPerLoadTranspose == 0 && tidx / kRowsPerLoadTranspose < kBlockM) { gLSE(tidx / kRowsPerLoadTranspose) = lse_logsum; }
+    // Calculate valid rows for this block
+    const int total_rows = params.b * params.h * params.seqlen_q;
+    const int local_row = tidx / kRowsPerLoadTranspose;
+    const int global_row = blockIdx.x * kBlockM + local_row;
+
+    const bool is_reduction_writer = tidx % kRowsPerLoadTranspose == 0;
+    const bool is_valid_row = (local_row < kBlockM) && (global_row < total_rows);
+
+    if (is_reduction_writer && is_valid_row) {
+        gLSE(local_row) = lse_logsum;
+    }
     // Store the scales exp(lse - lse_logsum) in shared memory.
     #pragma unroll
     for (int l = 0; l < kNLsePerThread; ++l) {

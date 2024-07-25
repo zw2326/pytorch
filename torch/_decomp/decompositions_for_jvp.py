@@ -1,3 +1,5 @@
+# mypy: allow-untyped-decorators
+# mypy: allow-untyped-defs
 import inspect
 from typing import Callable, Dict, List, Optional, Tuple
 
@@ -329,3 +331,4 @@ _register_jit_decomposition_for_jvp(torch.ops.aten.native_layer_norm_backward.de
 _register_jit_decomposition_for_jvp(torch.ops.aten.native_batch_norm_backward.default)
 _register_jit_decomposition_for_jvp(torch.ops.aten.cudnn_batch_norm_backward.default)
 _register_jit_decomposition_for_jvp(torch.ops.aten.batch_norm_backward.default)
+_register_jit_decomposition_for_jvp(torch.ops.aten.miopen_batch_norm_backward.default)

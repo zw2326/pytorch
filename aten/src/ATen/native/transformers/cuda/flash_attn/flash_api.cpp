@@ -38,7 +38,6 @@
 
 #include <c10/util/Exception.h>
 
-
 namespace pytorch_flash {
 
 #define CHECK_DEVICE(x) TORCH_CHECK(x.is_cuda(), #x " must be on CUDA")
@@ -295,8 +294,7 @@ inline int num_splits_heuristic(int batch_nheads_mblocks, int num_SMs, int num_n
     }
     return 1;
 }
-
-void set_params_splitkv(Flash_fwd_params &params, const int batch_size,
+std::tuple<at::Tensor, at::Tensor> set_params_splitkv(Flash_fwd_params &params, const int batch_size,
     const int num_heads, const int head_size, const int max_seqlen_k, const int max_seqlen_q,
     const int head_size_rounded, const float p_dropout,
     const int num_splits, cudaDeviceProp *dprops, struct c10::TensorOptions opts) {
@@ -308,21 +306,26 @@ void set_params_splitkv(Flash_fwd_params &params, const int batch_size,
     // In any case we don't expect seqlen_q to be larger than 64 for inference.
     const int num_m_blocks = (max_seqlen_q + 64 - 1) / 64;
     params.num_splits = num_splits;
+    at::Tensor softmax_lse_accum;
+    at::Tensor out_accum;
+
     if (p_dropout == 0.0f) {  // SplitKV is not implemented for dropout
         if (num_splits < 1) {
             params.num_splits = num_splits_heuristic(batch_size * num_heads * num_m_blocks, dprops->multiProcessorCount, num_n_blocks, 128);
         }
         if (params.num_splits > 1) {
-            at::Tensor softmax_lse_accum = at::empty({params.num_splits, batch_size, num_heads, max_seqlen_q}, opts.dtype(at::kFloat));
-            at::Tensor out_accum = at::empty({params.num_splits, batch_size, num_heads, max_seqlen_q, head_size_rounded}, opts.dtype(at::kFloat));
+            softmax_lse_accum = at::empty({params.num_splits, batch_size, num_heads, max_seqlen_q}, opts.dtype(at::kFloat));
+            out_accum = at::empty({params.num_splits, batch_size, num_heads, max_seqlen_q, head_size_rounded}, opts.dtype(at::kFloat));
             params.softmax_lseaccum_ptr = softmax_lse_accum.data_ptr();
             params.oaccum_ptr = out_accum.data_ptr();
         }
         TORCH_CHECK(params.num_splits <= 128, "num_splits > 128 not supported");
     }
+
+    return std::make_tuple(softmax_lse_accum, out_accum);
 }
 
-void set_params_alibi(Flash_fwd_params &params, c10::optional<at::Tensor> &alibi_slopes_, int batch_size, int num_heads){
+void set_params_alibi(Flash_fwd_params &params, std::optional<at::Tensor> &alibi_slopes_, int batch_size, int num_heads){
 #ifdef FLASHATTENTION_DISABLE_ALIBI
     TORCH_CHECK(!alibi_slopes_.has_value(), "This flash attention build does not support alibi.");
     params.alibi_slopes_ptr = nullptr;
@@ -346,15 +349,15 @@ std::tuple<at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tenso
 mha_fwd(const at::Tensor &q,         // batch_size x seqlen_q x num_heads x head_size
         const at::Tensor &k,         // batch_size x seqlen_k x num_heads_k x head_size
         const at::Tensor &v,         // batch_size x seqlen_k x num_heads_k x head_size
-        c10::optional<at::Tensor> &out_,             // batch_size x seqlen_q x num_heads x head_size
-        c10::optional<at::Tensor> &alibi_slopes_, // num_heads or batch_size x num_heads
+        std::optional<at::Tensor> &out_,             // batch_size x seqlen_q x num_heads x head_size
+        std::optional<at::Tensor> &alibi_slopes_, // num_heads or batch_size x num_heads
         const float p_dropout,
         const float softmax_scale,
         bool is_causal,
         int window_size_left,
         int window_size_right,
         const bool return_softmax,
-        c10::optional<at::Generator> gen_) {
+        std::optional<at::Generator> gen_) {
 
     auto dprops = at::cuda::getCurrentDeviceProperties();
     // bool is_sm75 = dprops->major == 7 && dprops->minor == 5;
@@ -410,7 +413,7 @@ mha_fwd(const at::Tensor &q,         // batch_size x seqlen_q x num_heads x head
         num_heads = num_heads_k;
     }
 
-    CHECK_SHAPE(q, batch_size, seqlen_q, num_heads, head_size_og);
+    CHECK_SHAPE(temp_q, batch_size, seqlen_q, num_heads, head_size_og);
     CHECK_SHAPE(k, batch_size, seqlen_k, num_heads_k, head_size_og);
     CHECK_SHAPE(v, batch_size, seqlen_k, num_heads_k, head_size_og);
 
@@ -443,7 +446,8 @@ mha_fwd(const at::Tensor &q,         // batch_size x seqlen_q x num_heads x head
 
     auto opts = q.options();
 
-    auto softmax_lse = at::empty({batch_size, num_heads, seqlen_q}, opts.dtype(at::kFloat));
+    auto softmax_lse = at::empty({batch_size, num_heads, seqlen_q }, opts.dtype(at::kFloat));
+
     at::Tensor p;
     // Only return softmax if there's dropout to reduce compilation time
     if (return_softmax) {
@@ -470,16 +474,18 @@ mha_fwd(const at::Tensor &q,         // batch_size x seqlen_q x num_heads x head
                      window_size_right);
 
 
-    set_params_splitkv(params, batch_size, num_heads,
-                       head_size, seqlen_k, seqlen_q,
-                       head_size_rounded, p_dropout, /*num_splits*/0, dprops, opts);
+    // Keep references to these tensors to extend their lifetime
+    at::Tensor softmax_lse_accum, out_accum;
+    std::tie(softmax_lse_accum, out_accum) = set_params_splitkv(params, batch_size, num_heads,
+                        head_size, seqlen_k, seqlen_q,
+                        head_size_rounded, p_dropout, /*num_splits*/0, dprops, opts);
 
     // We want to checkpoint and save the RNG state for backward if dropout
     // We get the default generator and return the seed and offset which will
     // be used in the backward function
     at::Tensor seed_t, offset_t;
     if (p_dropout > 0.0)  {
-        auto gen = at::get_generator_or_default<at::CUDAGeneratorImpl>(c10::nullopt, at::cuda::detail::getDefaultCUDAGenerator());
+        auto gen = at::get_generator_or_default<at::CUDAGeneratorImpl>(std::nullopt, at::cuda::detail::getDefaultCUDAGenerator());
         // number of times random will be generated per thread, to offset philox counter in thc random
         // state
         // We use a custom RNG that increases the offset by batch_size * nheads * 32.
@@ -532,11 +538,11 @@ std::tuple<at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tenso
 mha_varlen_fwd(const at::Tensor &q,  // total_q x num_heads x head_size, total_q := \sum_{i=0}^{b} s_i
                const at::Tensor &k,  // total_k x num_heads_k x head_size, total_k := \sum_{i=0}^{b} s_i
                const at::Tensor &v,  // total_k x num_heads_k x head_size, total_k := \sum_{i=0}^{b} s_i
-               c10::optional<at::Tensor> &out_, // total_q x num_heads x head_size, total_k := \sum_{i=0}^{b} s_i
+               std::optional<at::Tensor> &out_, // total_q x num_heads x head_size, total_k := \sum_{i=0}^{b} s_i
                const at::Tensor &cu_seqlens_q,  // b+1
                const at::Tensor &cu_seqlens_k,  // b+1
-               c10::optional<at::Tensor> &seqused_k, // b. If given, only this many elements of each batch element's keys are used.
-               c10::optional<at::Tensor> &alibi_slopes_, // num_heads or b x num_heads
+               std::optional<at::Tensor> &seqused_k, // b. If given, only this many elements of each batch element's keys are used.
+               std::optional<at::Tensor> &alibi_slopes_, // num_heads or b x num_heads
                int max_seqlen_q,
                const int max_seqlen_k,
                const float p_dropout,
@@ -546,7 +552,7 @@ mha_varlen_fwd(const at::Tensor &q,  // total_q x num_heads x head_size, total_q
                int window_size_left,
                int window_size_right,
                const bool return_softmax,
-               c10::optional<at::Generator> gen_) {
+               std::optional<at::Generator> gen_) {
 
     auto dprops = at::cuda::getCurrentDeviceProperties();
     // bool is_sm75 = dprops->major == 7 && dprops->minor == 5;
@@ -602,7 +608,7 @@ mha_varlen_fwd(const at::Tensor &q,  // total_q x num_heads x head_size, total_q
         cu_seqlens_q_d = nullptr;
     }
 
-    const int total_q = q.sizes()[0];
+    const int total_q = temp_q.sizes()[0];
 
     TORCH_CHECK(batch_size > 0, "batch size must be positive");
     TORCH_CHECK(head_size_og <= 256, "FlashAttention forward only supports head dimension at most 256");
@@ -612,7 +618,7 @@ mha_varlen_fwd(const at::Tensor &q,  // total_q x num_heads x head_size, total_q
     if (window_size_left >= max_seqlen_k) { window_size_left = -1; }
     if (window_size_right >= max_seqlen_k) { window_size_right = -1; }
 
-    CHECK_SHAPE(q, total_q, num_heads, head_size_og);
+    CHECK_SHAPE(temp_q, total_q, num_heads, head_size_og);
     CHECK_SHAPE(k, total_k, num_heads_k, head_size_og);
     CHECK_SHAPE(v, total_k, num_heads_k, head_size_og);
     CHECK_SHAPE(cu_seqlens_q, batch_size + 1);
@@ -686,9 +692,11 @@ mha_varlen_fwd(const at::Tensor &q,  // total_q x num_heads x head_size, total_q
                      window_size_left,
                      window_size_right,
                      seqlenq_ngroups_swapped);
+    // Keep references to these tensors to extend their lifetime
+    at::Tensor softmax_lse_accum, out_accum;
     if (seqlenq_ngroups_swapped) {
         // Only apply split-k for decoding
-        set_params_splitkv(params, batch_size, num_heads,
+        std::tie(softmax_lse_accum, out_accum) = set_params_splitkv(params, batch_size, num_heads,
                            head_size, max_seqlen_k, max_seqlen_q,
                            head_size_rounded, p_dropout, /*num_splits*/0, dprops, opts);
     }
@@ -696,7 +704,7 @@ mha_varlen_fwd(const at::Tensor &q,  // total_q x num_heads x head_size, total_q
     // We want to checkpoint and save the RNG state for backward if dropout
     // We get the default generator and return the seed and offset which will
     // be used in the backward function
-    auto gen = at::get_generator_or_default<at::CUDAGeneratorImpl>(c10::nullopt, at::cuda::detail::getDefaultCUDAGenerator());
+    auto gen = at::get_generator_or_default<at::CUDAGeneratorImpl>(std::nullopt, at::cuda::detail::getDefaultCUDAGenerator());
     at::Tensor seed_t, offset_t;
     if (p_dropout > 0.0)  {
         // number of times random will be generated per thread, to offset philox counter in thc random
@@ -765,10 +773,10 @@ mha_bwd(const at::Tensor &dout,  // batch_size x seqlen_q x num_heads, x head_si
         const at::Tensor &v,   // batch_size x seqlen_k x num_heads_k x head_size
         const at::Tensor &out,   // batch_size x seqlen_q x num_heads x head_size
         const at::Tensor &softmax_lse,     // b x h x seqlen_q
-        c10::optional<at::Tensor> &dq_,   // batch_size x seqlen_q x num_heads x head_size
-        c10::optional<at::Tensor> &dk_,   // batch_size x seqlen_k x num_heads_k x head_size
-        c10::optional<at::Tensor> &dv_,   // batch_size x seqlen_k x num_heads_k x head_size
-        c10::optional<at::Tensor> &alibi_slopes_, // num_heads or batch_size x num_heads
+        std::optional<at::Tensor> &dq_,   // batch_size x seqlen_q x num_heads x head_size
+        std::optional<at::Tensor> &dk_,   // batch_size x seqlen_k x num_heads_k x head_size
+        std::optional<at::Tensor> &dv_,   // batch_size x seqlen_k x num_heads_k x head_size
+        std::optional<at::Tensor> &alibi_slopes_, // num_heads or batch_size x num_heads
         const float p_dropout,         // probability to drop
         const float softmax_scale,
         const bool is_causal,
@@ -976,12 +984,12 @@ mha_varlen_bwd(const at::Tensor &dout,  // total_q x num_heads, x head_size
                const at::Tensor &v,   // total_k x num_heads_k x head_size, total_k := \sum_{i=0}^{b} s_i
                const at::Tensor &out,   // total_q x num_heads x head_size
                const at::Tensor &softmax_lse,     // b x h x s   softmax logsumexp
-               c10::optional<at::Tensor> &dq_,   // total_q x num_heads x head_size, total_q := \sum_{i=0}^{b} s_i
-               c10::optional<at::Tensor> &dk_,   // total_k x num_heads_k x head_size, total_k := \sum_{i=0}^{b} s_i
-               c10::optional<at::Tensor> &dv_,   // total_k x num_heads_k x head_size, total_k := \sum_{i=0}^{b} s_i
+               std::optional<at::Tensor> &dq_,   // total_q x num_heads x head_size, total_q := \sum_{i=0}^{b} s_i
+               std::optional<at::Tensor> &dk_,   // total_k x num_heads_k x head_size, total_k := \sum_{i=0}^{b} s_i
+               std::optional<at::Tensor> &dv_,   // total_k x num_heads_k x head_size, total_k := \sum_{i=0}^{b} s_i
                const at::Tensor &cu_seqlens_q,  // b+1
                const at::Tensor &cu_seqlens_k,  // b+1
-               c10::optional<at::Tensor> &alibi_slopes_, // num_heads or b x num_heads
+               std::optional<at::Tensor> &alibi_slopes_, // num_heads or b x num_heads
                const int max_seqlen_q,
                const int max_seqlen_k,          // max sequence length to choose the kernel
                const float p_dropout,         // probability to drop
@@ -1208,15 +1216,15 @@ std::tuple<at::Tensor, at::Tensor>
 mha_fwd_kvcache(at::Tensor &q,                 // batch_size x seqlen_q x num_heads x head_size
                 const at::Tensor &kcache,            // batch_size_c x seqlen_k x num_heads_k x head_size or num_blocks x page_block_size x num_heads_k x head_size if there's a block_table.
                 const at::Tensor &vcache,            // batch_size_c x seqlen_k x num_heads_k x head_size or num_blocks x page_block_size x num_heads_k x head_size if there's a block_table.
-                c10::optional<const at::Tensor> &k_, // batch_size x seqlen_knew x num_heads_k x head_size
-                c10::optional<const at::Tensor> &v_, // batch_size x seqlen_knew x num_heads_k x head_size
-                c10::optional<const at::Tensor> &seqlens_k_, // batch_size
-                c10::optional<const at::Tensor> &rotary_cos_, // seqlen_ro x (rotary_dim / 2)
-                c10::optional<const at::Tensor> &rotary_sin_, // seqlen_ro x (rotary_dim / 2)
-                c10::optional<const at::Tensor> &cache_batch_idx_, // indices to index into the KV cache
-                c10::optional<at::Tensor> &block_table_, // batch_size x max_num_blocks_per_seq
-                c10::optional<at::Tensor> &alibi_slopes_, // num_heads or batch_size x num_heads
-                c10::optional<at::Tensor> &out_,             // batch_size x seqlen_q x num_heads x head_size
+                std::optional<const at::Tensor> &k_, // batch_size x seqlen_knew x num_heads_k x head_size
+                std::optional<const at::Tensor> &v_, // batch_size x seqlen_knew x num_heads_k x head_size
+                std::optional<const at::Tensor> &seqlens_k_, // batch_size
+                std::optional<const at::Tensor> &rotary_cos_, // seqlen_ro x (rotary_dim / 2)
+                std::optional<const at::Tensor> &rotary_sin_, // seqlen_ro x (rotary_dim / 2)
+                std::optional<const at::Tensor> &cache_batch_idx_, // indices to index into the KV cache
+                std::optional<at::Tensor> &block_table_, // batch_size x max_num_blocks_per_seq
+                std::optional<at::Tensor> &alibi_slopes_, // num_heads or batch_size x num_heads
+                std::optional<at::Tensor> &out_,             // batch_size x seqlen_q x num_heads x head_size
                 const float softmax_scale,
                 bool is_causal,
                 int window_size_left,
@@ -1441,7 +1449,9 @@ mha_fwd_kvcache(at::Tensor &q,                 // batch_size x seqlen_q x num_he
         params.cache_batch_idx = reinterpret_cast<int *>(cache_batch_idx.data_ptr());
     }
 
-    set_params_splitkv(params, batch_size, num_heads,
+    // Keep references to these tensors to extend their lifetime
+    at::Tensor softmax_lse_accum, out_accum;
+    std::tie(softmax_lse_accum, out_accum) = set_params_splitkv(params, batch_size, num_heads,
                        head_size, seqlen_k, seqlen_q,
                        head_size_rounded, /*dropout*/0.f, num_splits, dprops, opts);
 

@@ -21,7 +21,7 @@
 namespace at::native {
 namespace {
 
-using scale_t = std::vector<c10::optional<double>>;
+using scale_t = std::vector<std::optional<double>>;
 
 // TODO: this file could benefit from a global renaming of its functions /
 // classes and terms, as well as from adding more comments. In particular:
@@ -987,21 +987,20 @@ struct HelperInterpBase {
   template <typename aa_filter_fn_t>
   static inline std::tuple<std::vector<Tensor>, int, unsigned int> _compute_index_ranges_int16_weights(
     int64_t input_size, int64_t output_size, int64_t stride, int64_t ndims,
-    int64_t reshape_dim, bool align_corners, const c10::optional<double> opt_scale,
+    int64_t reshape_dim, bool align_corners, const std::optional<double> opt_scale,
     int interp_size, aa_filter_fn_t aa_filter_fn, bool antialias, bool align_i32=false
   ) {
 
     double scale = area_pixel_compute_scale<double>(
         input_size, output_size, align_corners, opt_scale);
 
-    std::vector<Tensor> indices_weights;
-    double wt_max;
-    std::tie(indices_weights, interp_size, wt_max) = HelperInterpBase::_compute_index_ranges_weights<double, aa_filter_fn_t, sizeof(int16_t)>(
+    auto [indices_weights, aligned_interp_size, wt_max] = HelperInterpBase::_compute_index_ranges_weights<double, aa_filter_fn_t, sizeof(int16_t)>(
         input_size, output_size, stride, ndims, reshape_dim, scale, interp_size, aa_filter_fn, antialias, align_corners);
+    interp_size = aligned_interp_size;
 
     // Rescale float weights to int16 and compute weights precision
     auto weights_f64 = indices_weights[3];
-    double * data_f64 = weights_f64.data_ptr<double>();
+    double * data_f64 = weights_f64. template data_ptr<double>();
 
     unsigned int weights_precision = 0;
     for (weights_precision = 0; weights_precision < 22; ++weights_precision) {
@@ -1012,7 +1011,6 @@ struct HelperInterpBase {
 
     // Rescale float values to int16
     int16_t * data_i16 = (int16_t *) data_f64;
-    auto aligned_interp_size = interp_size;
 
     if (align_i32) {
       // We should respect int32 alignment as we will load int16 data as int32
@@ -1072,7 +1070,7 @@ struct HelperInterpNearest : public HelperInterpBase {
   static inline std::vector<Tensor> compute_indices_weights(
     at::ScalarType scalar_type,
     int64_t input_size, int64_t output_size, int64_t stride, int64_t ndims,
-    int64_t reshape_dim, bool align_corners, const c10::optional<double> opt_scale
+    int64_t reshape_dim, bool align_corners, const std::optional<double> opt_scale
   ) {
 
     TORCH_INTERNAL_ASSERT(!align_corners);
@@ -1123,7 +1121,7 @@ struct HelperInterpNearestExact : public HelperInterpNearest {
   static inline std::vector<Tensor> compute_indices_weights(
     at::ScalarType scalar_type,
     int64_t input_size, int64_t output_size, int64_t stride, int64_t ndims,
-    int64_t reshape_dim, bool align_corners, const c10::optional<double> opt_scale
+    int64_t reshape_dim, bool align_corners, const std::optional<double> opt_scale
   ) {
 
     TORCH_INTERNAL_ASSERT(!align_corners);
@@ -1175,7 +1173,7 @@ struct HelperInterpLinear : public HelperInterpBase {
   static inline std::vector<Tensor> compute_indices_weights(
     at::ScalarType scalar_type,
     int64_t input_size, int64_t output_size, int64_t stride, int64_t ndims, int64_t reshape_dim,
-    bool align_corners, const c10::optional<double> opt_scale
+    bool align_corners, const std::optional<double> opt_scale
   ) {
     // NOLINTNEXTLINE(cppcoreguidelines-init-variables)
     std::vector<Tensor> output;
@@ -1230,7 +1228,7 @@ struct HelperInterpLinear : public HelperInterpBase {
     int64_t ndims,
     int64_t reshape_dim,
     bool align_corners,
-    const c10::optional<double> opt_scale,
+    const std::optional<double> opt_scale,
     bool antialias
   ) {
 
@@ -1266,7 +1264,7 @@ struct HelperInterpLinear : public HelperInterpBase {
     int64_t ndims,
     int64_t reshape_dim,
     bool align_corners,
-    const c10::optional<double> opt_scale,
+    const std::optional<double> opt_scale,
     bool antialias,
     bool align_i32=false
   ) {
@@ -1296,7 +1294,7 @@ struct HelperInterpCubic : public HelperInterpBase {
   static inline std::vector<Tensor> compute_indices_weights(
     at::ScalarType scalar_type,
     int64_t input_size, int64_t output_size, int64_t stride, int64_t ndims, int64_t reshape_dim,
-    bool align_corners, const c10::optional<double> opt_scale
+    bool align_corners, const std::optional<double> opt_scale
   ) {
     // NOLINTNEXTLINE(cppcoreguidelines-init-variables)
     std::vector<Tensor> output;
@@ -1364,7 +1362,7 @@ struct HelperInterpCubic : public HelperInterpBase {
     int64_t ndims,
     int64_t reshape_dim,
     bool align_corners,
-    const c10::optional<double> opt_scale,
+    const std::optional<double> opt_scale,
     bool antialias
   ) {
 
@@ -1400,7 +1398,7 @@ struct HelperInterpCubic : public HelperInterpBase {
     int64_t ndims,
     int64_t reshape_dim,
     bool align_corners,
-    const c10::optional<double> opt_scale,
+    const std::optional<double> opt_scale,
     bool antialias,
     bool align_i32=false
   ) {
@@ -1422,7 +1420,7 @@ struct HelperInterpCubic : public HelperInterpBase {
 //
 // Internally, it uses TensorIterator to optimize the computations.
 // - out_ndims is the number of interpolated dims: 1, 2, 3
-// - scale_type is template type for scales, typically c10::optional<double>
+// - scale_type is template type for scales, typically std::optional<double>
 // - template<typename> class F is one of the above structs to compute indices and weights
 template <int out_ndims, typename scale_type, class F>
 void upsample_generic_Nd_kernel_impl(
@@ -1686,7 +1684,7 @@ void separable_upsample_generic_Nd_kernel_impl(
 void upsample_nearest1d_kernel_impl(
     const Tensor& output,
     const Tensor& input,
-    c10::optional<double> scales_w) {
+    std::optional<double> scales_w) {
   upsample_generic_Nd_kernel_impl<1, scale_t, HelperInterpNearest>(
       output, input, false, {scales_w});
 }
@@ -1694,7 +1692,7 @@ void upsample_nearest1d_kernel_impl(
 void _upsample_nearest_exact1d_kernel_impl(
     const Tensor& output,
     const Tensor& input,
-    c10::optional<double> scales_w) {
+    std::optional<double> scales_w) {
   upsample_generic_Nd_kernel_impl<1, scale_t, HelperInterpNearestExact>(
     output, input, false, {scales_w});
 }
@@ -1726,8 +1724,8 @@ int _use_vectorized_kernel_cond_3d(
 void upsample_nearest2d_kernel_impl(
     const Tensor& output,
     const Tensor& input,
-    c10::optional<double> scales_h,
-    c10::optional<double> scales_w) {
+    std::optional<double> scales_h,
+    std::optional<double> scales_w) {
   if (_use_vectorized_kernel_cond_2d(output, input)) {
     AT_DISPATCH_FLOATING_TYPES_AND3(kByte, kBFloat16, kHalf,
         input.scalar_type(), "upsample_nearest2d_channels_last", [&] {
@@ -1742,8 +1740,8 @@ void upsample_nearest2d_kernel_impl(
 void _upsample_nearest_exact2d_kernel_impl(
     const Tensor& output,
     const Tensor& input,
-    c10::optional<double> scales_h,
-    c10::optional<double> scales_w) {
+    std::optional<double> scales_h,
+    std::optional<double> scales_w) {
   if (_use_vectorized_kernel_cond_2d(output, input)) {
     AT_DISPATCH_FLOATING_TYPES_AND3(kByte, kBFloat16, kHalf, input.scalar_type(), "upsample_nearest2d_channels_last", [&] {
       cpu_upsample_nearest_channels_last<scalar_t, scale_t, nearest_exact_idx>(output, input, {scales_h, scales_w});
@@ -1757,9 +1755,9 @@ void _upsample_nearest_exact2d_kernel_impl(
 void upsample_nearest3d_kernel_impl(
     const Tensor& output,
     const Tensor& input,
-    c10::optional<double> scales_d,
-    c10::optional<double> scales_h,
-    c10::optional<double> scales_w) {
+    std::optional<double> scales_d,
+    std::optional<double> scales_h,
+    std::optional<double> scales_w) {
   if (_use_vectorized_kernel_cond_3d(output, input)) {
     AT_DISPATCH_FLOATING_TYPES_AND3(kByte, kBFloat16, kHalf,
         input.scalar_type(), "upsample_nearest3d_channels_last", [&] {
@@ -1774,9 +1772,9 @@ void upsample_nearest3d_kernel_impl(
 void _upsample_nearest_exact3d_kernel_impl(
     const Tensor& output,
     const Tensor& input,
-    c10::optional<double> scales_d,
-    c10::optional<double> scales_h,
-    c10::optional<double> scales_w) {
+    std::optional<double> scales_d,
+    std::optional<double> scales_h,
+    std::optional<double> scales_w) {
   if (_use_vectorized_kernel_cond_3d(output, input)) {
     AT_DISPATCH_FLOATING_TYPES_AND3(kByte, kBFloat16, kHalf, input.scalar_type(), "upsample_nearest3d_channels_last", [&] {
       cpu_upsample_nearest_channels_last<scalar_t, scale_t, nearest_exact_idx>(output, input, {scales_d, scales_h, scales_w});
@@ -1791,7 +1789,7 @@ void upsample_linear1d_kernel_impl(
     const Tensor& output,
     const Tensor& input,
     bool align_corners,
-    c10::optional<double> scales_w) {
+    std::optional<double> scales_w) {
   upsample_generic_Nd_kernel_impl<1, scale_t, HelperInterpLinear>(
     output, input, align_corners, {scales_w});
 }
@@ -1801,8 +1799,8 @@ void upsample_bilinear2d_kernel_impl_float(
     const Tensor& output,
     const Tensor& input,
     bool align_corners,
-    c10::optional<double> scales_h,
-    c10::optional<double> scales_w) {
+    std::optional<double> scales_h,
+    std::optional<double> scales_w) {
 
   // See note above about _use_vectorized_kernel_cond_2d(output, input). The extra cond is present
   // because benchmarks showed that with only 1 thread, images (C == 3) were
@@ -1823,8 +1821,8 @@ void upsample_bilinear2d_kernel_impl(
     const Tensor& output,
     const Tensor& input,
     bool align_corners,
-    c10::optional<double> scales_h,
-    c10::optional<double> scales_w) {
+    std::optional<double> scales_h,
+    std::optional<double> scales_w) {
 
   if (input.dtype() == at::kByte){
     #ifdef CPU_CAPABILITY_AVX2
@@ -1852,8 +1850,8 @@ void upsample_bilinear2d_aa_kernel_impl(
     const Tensor& output,
     const Tensor& input,
     bool align_corners,
-    c10::optional<double> scales_h,
-    c10::optional<double> scales_w) {
+    std::optional<double> scales_h,
+    std::optional<double> scales_w) {
 #ifdef CPU_CAPABILITY_AVX2
   if (input.dtype() == at::kByte && input.size(1) <= 4) {
     upsample_avx_bilinear_bicubic_uint8<scale_t, HelperInterpLinear>(
@@ -1875,9 +1873,9 @@ void upsample_trilinear3d_kernel_impl(
     const Tensor& output,
     const Tensor& input,
     bool align_corners,
-    c10::optional<double> scales_d,
-    c10::optional<double> scales_h,
-    c10::optional<double> scales_w) {
+    std::optional<double> scales_d,
+    std::optional<double> scales_h,
+    std::optional<double> scales_w) {
   if ((_use_vectorized_kernel_cond_3d(output, input))) {
     AT_DISPATCH_FLOATING_TYPES_AND2(kBFloat16, kHalf, input.scalar_type(), "upsample_trilinear3d_channels_last", [&] {
       cpu_upsample_linear_channels_last<scalar_t, scale_t>(output, input, align_corners, {scales_d, scales_h, scales_w});
@@ -1892,8 +1890,8 @@ void upsample_bicubic2d_kernel_impl(
     const Tensor& output,
     const Tensor& input,
     bool align_corners,
-    c10::optional<double> scales_h,
-    c10::optional<double> scales_w) {
+    std::optional<double> scales_h,
+    std::optional<double> scales_w) {
 
   if (input.dtype() == at::kByte){
     #ifdef CPU_CAPABILITY_AVX2
@@ -1922,8 +1920,8 @@ void upsample_bicubic2d_aa_kernel_impl(
     const Tensor& output,
     const Tensor& input,
     bool align_corners,
-    c10::optional<double> scales_h,
-    c10::optional<double> scales_w) {
+    std::optional<double> scales_h,
+    std::optional<double> scales_w) {
 
 #ifdef CPU_CAPABILITY_AVX2
   if (input.dtype() == at::kByte && input.size(1) <= 4) {
@@ -2061,8 +2059,8 @@ void upsample_bilinear2d_aa_backward_kernel_impl(
     const Tensor& grad_input,
     const Tensor& grad_output,
     bool align_corners,
-    c10::optional<double> scales_h,
-    c10::optional<double> scales_w) {
+    std::optional<double> scales_h,
+    std::optional<double> scales_w) {
   AT_DISPATCH_FLOATING_TYPES(
       grad_output.scalar_type(), "upsample_bilinear2d_aa_backward_cpu", [&] {
         cpu_upsample_genNd_backward_aa<scalar_t, scale_t, HelperInterpLinear>(
@@ -2074,8 +2072,8 @@ void upsample_bicubic2d_aa_backward_kernel_impl(
     const Tensor& grad_input,
     const Tensor& grad_output,
     bool align_corners,
-    c10::optional<double> scales_h,
-    c10::optional<double> scales_w) {
+    std::optional<double> scales_h,
+    std::optional<double> scales_w) {
   AT_DISPATCH_FLOATING_TYPES(
       grad_output.scalar_type(), "upsample_bicubic2d_aa_backward_cpu", [&] {
         cpu_upsample_genNd_backward_aa<scalar_t, scale_t, HelperInterpCubic>(
