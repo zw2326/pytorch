@@ -200,8 +200,8 @@ struct IndexValueVec {
   };
 };
 
-template <typename T, int L>
-inline IndexValueVec<T, L>& argmin_combine_vec(IndexValueVec<T, L>& a, at::vec::Vectorized<T> next_value, int64_t next_index, bool horizontal_reduction){
+template <bool horizontal_reduction, typename T, int L>
+inline IndexValueVec<T, L>& argmin_combine_vec(IndexValueVec<T, L>& a, at::vec::Vectorized<T> next_value, int64_t next_index){
   constexpr int len = at::vec::Vectorized<T>::size();
   __at_align__ std::array<T, len> tmpbuf;
   next_value.store(tmpbuf.data());
@@ -211,8 +211,8 @@ inline IndexValueVec<T, L>& argmin_combine_vec(IndexValueVec<T, L>& a, at::vec::
   return a;
 }
 
-template <typename T, int L>
-inline IndexValueVec<T, L>& argmax_combine_vec(IndexValueVec<T, L>& a, at::vec::Vectorized<T> next_value, int64_t next_index, bool horizontal_reduction){
+template <bool horizontal_reduction, typename T, int L>
+inline IndexValueVec<T, L>& argmax_combine_vec(IndexValueVec<T, L>& a, at::vec::Vectorized<T> next_value, int64_t next_index){
   constexpr int len = at::vec::Vectorized<T>::size();
   __at_align__ std::array<T, len> tmpbuf;
   next_value.store(tmpbuf.data());
@@ -222,8 +222,8 @@ inline IndexValueVec<T, L>& argmax_combine_vec(IndexValueVec<T, L>& a, at::vec::
   return a;
 }
 
-template <typename T, int L, int N>
-inline IndexValueVec<T, L>& argmin_combine_vec(IndexValueVec<T, L>& a, at::vec::VectorizedN<T, N> next_value, int64_t next_index, bool horizontal_reduction){
+template <bool horizontal_reduction, typename T, int L, int N>
+inline IndexValueVec<T, L>& argmin_combine_vec(IndexValueVec<T, L>& a, at::vec::VectorizedN<T, N> next_value, int64_t next_index){
   constexpr int len = at::vec::VectorizedN<T, N>::size();
   __at_align__ std::array<T, len> tmpbuf;
   next_value.store(tmpbuf.data());
@@ -233,8 +233,8 @@ inline IndexValueVec<T, L>& argmin_combine_vec(IndexValueVec<T, L>& a, at::vec::
   return a;
 }
 
-template <typename T, int L, int N>
-inline IndexValueVec<T, L>& argmax_combine_vec(IndexValueVec<T, L>& a, at::vec::VectorizedN<T, N> next_value, int64_t next_index, bool horizontal_reduction){
+template <bool horizontal_reduction, typename T, int L, int N>
+inline IndexValueVec<T, L>& argmax_combine_vec(IndexValueVec<T, L>& a, at::vec::VectorizedN<T, N> next_value, int64_t next_index){
   constexpr int len = at::vec::VectorizedN<T, N>::size();
   __at_align__ std::array<T, len> tmpbuf;
   next_value.store(tmpbuf.data());

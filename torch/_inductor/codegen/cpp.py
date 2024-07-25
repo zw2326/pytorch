@@ -2579,7 +2579,7 @@ class CppVecKernel(CppKernel):
         elif reduction_type in ("argmin", "argmax"):
             if index is not None:
                 assert horizontal_reduction is not None
-                return f"{reduction_type}_combine_vec({var}, {next_value}, {index}, {str(horizontal_reduction).lower()})"
+                return f"{reduction_type}_combine_vec<{str(horizontal_reduction).lower()}>({var}, {next_value}, {index})"
             else:
                 return f"{reduction_type}_combine_vec({var}, {next_value})"
         else:
