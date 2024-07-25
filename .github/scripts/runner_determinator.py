@@ -14,7 +14,11 @@ WORKFLOW_LABEL_META = ""  # use meta runners
 WORKFLOW_LABEL_LF = "lf."  # use runners from the linux foundation
 WORKFLOW_LABEL_LF_CANARY = "lf.c."  # use canary runners from the linux foundation
 
+RUNNER_AMI_LEGACY = "legacy"
+RUNNER_AMI_AL2023 = "al2023"
+
 GITHUB_OUTPUT = os.getenv("GITHUB_OUTPUT", "")
+GH_OUTPUT_KEY_AMI = "runner-ami"
 GH_OUTPUT_KEY_LABEL_TYPE = "label-type"
 
 
@@ -150,7 +154,7 @@ def get_workflow_type(issue: Issue, workflow_requestors: Iterable[str]) -> str:
             return WORKFLOW_LABEL_LF
         else:
             all_opted_in_users = {
-                usr_raw.strip("\n\t@ ") for usr_raw in first_comment.split()
+                usr_raw.strip("\n\t@ ").split(',')[0] for usr_raw in first_comment.split()
             }
             opted_in_requestors = {
                 usr for usr in workflow_requestors if usr in all_opted_in_users
@@ -173,12 +177,46 @@ def get_workflow_type(issue: Issue, workflow_requestors: Iterable[str]) -> str:
         return WORKFLOW_LABEL_META
 
 
+def get_optin_feature(issue: Issue, workflow_requestors: Iterable[str], feature: str, fallback: str) -> str:
+    try:
+        first_comment = issue.get_comments()[0].body.strip("\n\t ")
+        userlist = {
+            u.lstrip("#").strip("\n\t@ ") for u in first_comment.split()
+        }
+        all_opted_in_users = set()
+        for user in userlist:
+            for i in user.split(","):
+                if i == feature:
+                    all_opted_in_users.add(user.split(",")[0])
+        opted_in_requestors = {
+            usr for usr in workflow_requestors if usr in all_opted_in_users
+        }
+
+        if opted_in_requestors:
+            log.info(
+                f"Feature {feature} is enabled for {', '.join(opted_in_requestors)}. Using feature {feature}."
+            )
+            return feature
+        else:
+            log.info(
+                f"Feature {feature} is disabled for {', '.join(workflow_requestors)}. Using fallback \"{fallback}\"."
+            )
+            return fallback
+
+    except Exception as e:
+        log.error(
+            f"Failed to determine if user has opted-in to feature {feature}. Using fallback \"{fallback}\". Exception: {e}"
+        )
+        return fallback
+
+
 def main() -> None:
     args = parse_args()
 
     if args.github_ref_type == "branch" and is_exception_branch(args.github_branch):
         log.info(f"Exception branch: '{args.github_branch}', using meta runners")
         label_type = WORKFLOW_LABEL_META
+        runner_ami = RUNNER_AMI_LEGACY
     else:
         try:
             gh = get_gh_client(args.github_token)
@@ -198,17 +236,28 @@ def main() -> None:
                     username,
                 ),
             )
+            runner_ami = get_optin_feature(
+                issue=issue,
+                workflow_requestors=(
+                    args.github_issue_owner,
+                    username,
+                ),
+                feature=RUNNER_AMI_AL2023,
+                fallback=RUNNER_AMI_LEGACY,
+            )
         except Exception as e:
             log.error(
                 f"Failed to get issue. Falling back to meta runners. Exception: {e}"
             )
             label_type = WORKFLOW_LABEL_META
+            runner_ami = RUNNER_AMI_LEGACY
 
     # For Canary builds use canary runners
     if args.github_repo == "pytorch/pytorch-canary" and label_type == WORKFLOW_LABEL_LF:
         label_type = WORKFLOW_LABEL_LF_CANARY
 
     set_github_output(GH_OUTPUT_KEY_LABEL_TYPE, label_type)
+    set_github_output(GH_OUTPUT_KEY_AMI, runner_ami)
 
 
 if __name__ == "__main__":
