@@ -35,6 +35,7 @@ import torch._inductor.async_compile  # noqa: F401 required to warm up AsyncComp
 from torch._dynamo.utils import counters, dynamo_timed
 from torch._inductor.metrics import get_metric_table, is_metric_table_enabled
 from torch.fx.experimental.symbolic_shapes import free_unbacked_symbols
+from torch.utils._ordered_set import OrderedSet
 from torch.utils._sympy.symbol import free_symbol_is_type, SymT
 from torch.utils._triton import has_triton
 
@@ -154,13 +155,13 @@ class SchedulerBuffer:
 class BaseSchedulerNode:
     group: Tuple[torch.device, Tuple[Tuple[sympy.Expr, ...], ...]]
     read_writes: dependencies.ReadWrites
-    unmet_dependencies: Set[Dep]
+    unmet_dependencies: OrderedSet[Dep]
 
     def __init__(self, scheduler: Scheduler, node: ir.Operation) -> None:
         self.scheduler: Scheduler = scheduler
         self.node: Optional[ir.Operation] = node
         self.set_read_writes(node.get_read_writes())
-        self.ancestors: Set[str] = set()
+        self.ancestors: OrderedSet[str] = OrderedSet()
         # .min_order and .max_order are only relevant for "grouped" nodes such as FusedSchedulerNode.
         # e.g. if the FusedSchedulerNode includes nodes (op_1, op_2, op_3), and op_X is X-th node
         # in `self.scheduler.nodes`, then for this FusedSchedulerNode, .min_order is 1 and .max_order is 3.
@@ -168,9 +169,9 @@ class BaseSchedulerNode:
         # .min_order = .max_order = X if this node is X-th node in `self.scheduler.nodes`.
         self.min_order: int
         self.max_order: int
-        self.last_usage: Set[
+        self.last_usage: OrderedSet[
             str
-        ] = set()  # buffers that won't be used after this kernel
+        ] = OrderedSet()  # buffers that won't be used after this kernel
         self.written = False
 
         self.outputs: List[SchedulerBuffer] = [
@@ -256,10 +257,10 @@ class BaseSchedulerNode:
         self.prune_deps()
 
     def set_last_usage(
-        self, future_used_buffers: Set[str], mutation_real_name: Dict[str, str]
+        self, future_used_buffers: OrderedSet[str], mutation_real_name: Dict[str, str]
     ) -> None:
         used_buffers = self.used_or_aliased_buffer_names()
-        used_buffers = {mutation_real_name.get(k, k) for k in used_buffers}
+        used_buffers = OrderedSet([mutation_real_name.get(k, k) for k in used_buffers])
         self.last_usage = used_buffers - future_used_buffers
 
     def mark_run(self) -> None:
@@ -269,14 +270,14 @@ class BaseSchedulerNode:
     def op_counts(self) -> Counter[str]:
         return self.read_writes.op_counts
 
-    def used_buffer_names(self) -> Set[str]:
-        return {
+    def used_buffer_names(self) -> OrderedSet[str]:
+        return OrderedSet(
             dep.name
             for dep in itertools.chain(self.read_writes.reads, self.read_writes.writes)
-        }
+        )
 
-    def used_or_aliased_buffer_names(self) -> Set[str]:
-        used_names = set()
+    def used_or_aliased_buffer_names(self) -> OrderedSet[str]:
+        used_names: OrderedSet[str] = OrderedSet()
 
         deps = [
             dep.name
@@ -292,11 +293,11 @@ class BaseSchedulerNode:
         return used_names
 
     def prune_deps(self) -> None:
-        self.unmet_dependencies = {
+        self.unmet_dependencies = OrderedSet(
             dep
             for dep in self.unmet_dependencies
             if dep.name not in self.scheduler.available_buffer_names
-        }
+        )
 
     def prune_weak_deps(self) -> None:
         # Prune weak dependencies on operations that have been removed
@@ -321,11 +322,11 @@ class BaseSchedulerNode:
     def get_first_name(self) -> str:
         return self.get_name()
 
-    def get_operation_names(self) -> Set[str]:
-        return {node.get_name() for node in self.get_nodes()}
+    def get_operation_names(self) -> OrderedSet[str]:
+        return OrderedSet(node.get_name() for node in self.get_nodes())
 
-    def get_buffer_names(self) -> Set[str]:
-        return {out.get_name() for out in self.outputs}
+    def get_buffer_names(self) -> OrderedSet[str]:
+        return OrderedSet(out.get_name() for out in self.outputs)
 
     def get_nodes(self) -> Sequence[BaseSchedulerNode]:
         return [self]
@@ -544,7 +545,7 @@ class BaseSchedulerNode:
         def is_materialized(buf: str, snodes: Sequence[BaseSchedulerNode]) -> bool:
             users = self.scheduler.name_to_buf[buf].users
             buf_uses = {user.node for user in users}
-            return len(buf_uses - set(snodes)) > 0
+            return len(buf_uses - OrderedSet(snodes)) > 0
 
         if isinstance(self, FusedSchedulerNode):
             removed_buffers = {
@@ -708,7 +709,7 @@ class WhyNoFuse:
 
 
 def pformat(obj: Any) -> str:
-    if isinstance(obj, set):
+    if isinstance(obj, OrderedSet):
         # pformat has trouble with sets of sympy exprs
         obj = sorted(obj, key=str)
     result = pprint.pformat(obj, indent=4)
@@ -719,7 +720,7 @@ def pformat(obj: Any) -> str:
 
 class OutputNode:
     def __init__(self, dep: StarDep) -> None:
-        self.unmet_dependencies = {dep}
+        self.unmet_dependencies = OrderedSet([dep])
 
     def is_reduction(self) -> bool:
         return False
@@ -931,8 +932,8 @@ class SchedulerNode(BaseSchedulerNode):
         return False
 
     @cache_on_self
-    def _get_atomic_add_buffers(self) -> Set[str]:
-        buffers_store_as_atomic_add = set()
+    def _get_atomic_add_buffers(self) -> OrderedSet[str]:
+        buffers_store_as_atomic_add: OrderedSet[str] = OrderedSet()
         if isinstance(self._body, ir.LoopBody):
             for node in self._body.get_nodes():
                 if (
@@ -960,7 +961,7 @@ def init_group_node(
     group_snode.snodes = snodes
     group_snode.scheduler = scheduler
     group_snode.node = None
-    group_snode.ancestors = set.union(
+    group_snode.ancestors = OrderedSet.union(
         *[x.ancestors for x in snodes if x.ancestors is not None]
     )
 
@@ -968,11 +969,14 @@ def init_group_node(
         dependencies.ReadWrites.merge_list([x.read_writes for x in snodes])
     )
 
-    group_snode.unmet_dependencies = {
-        dep
-        for dep in set.union(*[x.unmet_dependencies for x in snodes])
-        if dep.name not in group_snode.get_buffer_names()
-    } - group_snode.read_writes.writes
+    group_snode.unmet_dependencies = (
+        OrderedSet(
+            dep
+            for dep in OrderedSet.union(*[x.unmet_dependencies for x in snodes])
+            if dep.name not in group_snode.get_buffer_names()
+        )
+        - group_snode.read_writes.writes
+    )
 
     group_snode.min_order = min(x.min_order for x in group_snode.snodes)
     group_snode.max_order = max(x.max_order for x in group_snode.snodes)
@@ -1014,8 +1018,8 @@ class FusedSchedulerNode(BaseSchedulerNode):
         return self.snodes[0].get_name()
 
     @cache_on_self
-    def get_buffer_names(self) -> Set[str]:
-        return set.union(*[x.get_buffer_names() for x in self.snodes])
+    def get_buffer_names(self) -> OrderedSet[str]:
+        return OrderedSet.union(*[x.get_buffer_names() for x in self.snodes])
 
     def get_outputs(self) -> List[SchedulerBuffer]:
         result: List[SchedulerBuffer] = []
@@ -1041,25 +1045,27 @@ class FusedSchedulerNode(BaseSchedulerNode):
         return f"{self}, snodes: {snodes_str}"
 
     def set_last_usage(
-        self, future_used_buffers: Set[str], mutation_real_name: Dict[str, str]
+        self, future_used_buffers: OrderedSet[str], mutation_real_name: Dict[str, str]
     ) -> None:
         # Set self.last_usage using the global information
         # This will be used for inter-kernel optimisations
         super().set_last_usage(future_used_buffers, mutation_real_name)
         # Set self.last_usage on the snodes
         # This will be used for optimisations within the kernel
-        future_used_buffers: Set[str] = set()
+        future_used_buffers: OrderedSet[str] = OrderedSet()
         for node in reversed(self.snodes):
             node.set_last_usage(future_used_buffers, mutation_real_name)
             future_used_buffers.update(node.last_usage)
 
     @cache_on_self
-    def used_buffer_names(self) -> Set[str]:
-        return set.union(*[x.used_buffer_names() for x in self.snodes])
+    def used_buffer_names(self) -> OrderedSet[str]:
+        return OrderedSet.union(*[x.used_buffer_names() for x in self.snodes])
 
     @cache_on_self
-    def used_or_aliased_buffer_names(self) -> Set[str]:
-        return set.union(*[x.used_or_aliased_buffer_names() for x in self.snodes])
+    def used_or_aliased_buffer_names(self) -> OrderedSet[str]:
+        return OrderedSet.union(
+            *[x.used_or_aliased_buffer_names() for x in self.snodes]
+        )
 
     def get_nodes(self) -> Sequence[BaseSchedulerNode]:
         return self.snodes
@@ -1317,13 +1323,16 @@ class ForeachKernelSchedulerNode(FusedSchedulerNode):
                 )
             )
 
-            self.unmet_dependencies = {
-                dep
-                for dep in set.union(
-                    prev_node_1.unmet_dependencies, prev_node_2.unmet_dependencies
+            self.unmet_dependencies = (
+                OrderedSet(
+                    dep
+                    for dep in OrderedSet.union(
+                        prev_node_1.unmet_dependencies, prev_node_2.unmet_dependencies
+                    )
+                    if dep.name not in self.get_buffer_names()
                 )
-                if dep.name not in self.get_buffer_names()
-            } - self.read_writes.writes
+                - self.read_writes.writes
+            )
 
             self.min_order = min([prev_node_1.min_order, prev_node_2.min_order])
             self.max_order = max([prev_node_1.max_order, prev_node_2.max_order])
@@ -1344,7 +1353,7 @@ class ForeachKernelSchedulerNode(FusedSchedulerNode):
 
         self.use_custom_partition_algo = use_custom_partition_algo
         self.group = (snodes[0].get_device(), ((sympy.Expr("combo_kernel"),),))
-        self.origins: Set[torch.fx.Node] = set()
+        self.origins: OrderedSet[torch.fx.Node] = OrderedSet()
         self.enable_autotune = enable_autotune
 
     def mark_run(self) -> None:
@@ -1423,8 +1432,8 @@ class GroupedSchedulerNode(BaseSchedulerNode):
         return self.snodes[0].get_name()
 
     @cache_on_self
-    def get_buffer_names(self) -> Set[str]:
-        return set.union(*[x.get_buffer_names() for x in self.snodes])
+    def get_buffer_names(self) -> OrderedSet[str]:
+        return OrderedSet.union(*[x.get_buffer_names() for x in self.snodes])
 
     def get_outputs(self) -> List[SchedulerBuffer]:
         result: List[SchedulerBuffer] = []
@@ -1530,12 +1539,14 @@ class Scheduler:
         self.backends: Dict[torch.device, BaseScheduling] = {}
         self.post_grad_graph_id = next(_post_grad_graph_counter)
 
-        self.completed_operations: Set[str] = set()
-        self.available_buffer_names = {
-            *V.graph.graph_inputs.keys(),
-            *V.graph.constants.keys(),
-            *V.graph.torchbind_constants.keys(),
-        }
+        self.completed_operations: OrderedSet[str] = OrderedSet()
+        self.available_buffer_names = OrderedSet(
+            [
+                *V.graph.graph_inputs.keys(),
+                *V.graph.constants.keys(),
+                *V.graph.torchbind_constants.keys(),
+            ]
+        )
 
         self.nodes = [self.create_scheduler_node(n) for n in nodes]
 
@@ -1582,7 +1593,7 @@ class Scheduler:
         self.name_to_fused_node = {n.get_name(): n for n in self.nodes}
         self.create_foreach_nodes()
         self.nodes = self.topological_sort_schedule(self.nodes)
-        self.logged_slow_fusion: Set[Tuple[str, str]] = set()
+        self.logged_slow_fusion: OrderedSet[Tuple[str, str]] = OrderedSet()
         if config._pre_fusion_custom_pass is not None:
             self.nodes = config._pre_fusion_custom_pass(self.nodes)
         self.nodes = self.fuse_nodes(self.nodes)
@@ -1597,7 +1608,7 @@ class Scheduler:
 
         # used during codegen:
         self.current_device: Optional[torch.device] = None
-        self.buffer_names_to_free: Set[str] = set()
+        self.buffer_names_to_free: OrderedSet[str] = OrderedSet()
 
         # fx graph node to the position it appears in the graph
         # for debug attribution
@@ -1644,7 +1655,7 @@ class Scheduler:
             raise NotImplementedError(node)
 
     def create_foreach_nodes(self) -> None:
-        removed_node_names = set()
+        removed_node_names: OrderedSet[str] = OrderedSet()
         fe_nodes = []
         kept_node_names = self.name_to_fused_node.keys()
 
@@ -1691,7 +1702,7 @@ class Scheduler:
             """
             This data structure behaves like a list except it makes sure the
             elements remain unique.
-            Normally one could use a set/dict for this purpose however
+            Normally one could use a OrderedSet/dict for this purpose however
             the list in question gets elements appended as it is being
             iterated over which means that we need to keep the list
             semantics.
@@ -1700,10 +1711,10 @@ class Scheduler:
             def __init__(
                 self,
                 items: Optional[List[T]] = None,
-                membership: Optional[Set[T]] = None,
+                membership: Optional[OrderedSet[T]] = None,
             ) -> None:
                 self.items = items or []
-                self.membership = membership or set()
+                self.membership = membership or OrderedSet()
 
             def append(self, node_user: T) -> None:
                 if node_user in self.membership:
@@ -1712,7 +1723,7 @@ class Scheduler:
                 self.membership.add(node_user)
 
             def __add__(self, other: DedupList[T]) -> DedupList[T]:
-                new_membership = set.union(self.membership, other.membership)
+                new_membership = OrderedSet.union(self.membership, other.membership)
                 new_items = self.items + [
                     x for x in other.items if x not in self.membership
                 ]
@@ -1750,8 +1761,8 @@ class Scheduler:
                 return rename(self.mutation_renames[n])
             return n
 
-        def dep_closure(node: BaseSchedulerNode) -> Set[str]:
-            reachable_names = set(node.get_buffer_names())
+        def dep_closure(node: BaseSchedulerNode) -> OrderedSet[str]:
+            reachable_names: OrderedSet[str] = OrderedSet(node.get_buffer_names())
             read_deps: Dict[
                 Tuple[sympy.Expr, Tuple[sympy.Expr, ...]], List[MemoryDep]
             ] = collections.defaultdict(list)
@@ -1949,7 +1960,7 @@ class Scheduler:
         """
         Ensure nodes is in topologically sorted order
         """
-        seen: Set[BaseSchedulerNode] = set()
+        seen: OrderedSet[BaseSchedulerNode] = OrderedSet()
         name_to_node: Dict[str, BaseSchedulerNode] = dict()
         result: List[BaseSchedulerNode] = []
 
@@ -1975,9 +1986,9 @@ class Scheduler:
         Populate each node.ancestors
         """
         # note self.nodes is topologically sorted
-        name_to_ancestors: Dict[str, Set[str]] = {}
+        name_to_ancestors: Dict[str, OrderedSet[str]] = {}
         for node in self.nodes:
-            ancestors = set()
+            ancestors: OrderedSet[str] = OrderedSet()
             for dep in node.unmet_dependencies:
                 dep_node_name = self.name_to_buf[dep.name].defining_op.get_name()
                 ancestors.add(dep_node_name)
@@ -2263,7 +2274,7 @@ class Scheduler:
             - self.can_fuse(): checks if a fusion is legal
             - self.score_fusion(): assigns priority to a given fusion
         """
-        fused_nodes = set(nodes)
+        fused_nodes = OrderedSet(nodes)
         if fusion_log.isEnabledFor(logging.DEBUG):
             fusion_log.debug("fuse_nodes_once, candidates:")
             for node in fused_nodes:
@@ -2305,7 +2316,7 @@ class Scheduler:
         Helper to find all legal fusion opportunities, sorted by self.score_fusion()
         """
         possible_fusions = []
-        seen = set()
+        seen: OrderedSet[Tuple[BaseSchedulerNode, BaseSchedulerNode]] = OrderedSet()
 
         def check_all_pairs(nodes: List[BaseSchedulerNode]) -> None:
             for node1_index, node1 in enumerate(nodes):
@@ -2353,8 +2364,8 @@ class Scheduler:
         Finds whether there's a path from node1 to node2 (or vice-versa)
         caused indirectly by other fusions.
         """
-
-        visited = set()
+        # since we are just returning boolean here, use slightly faster, unordered set
+        visited: Set[FusedSchedulerNode] = set()
 
         def found_path(node: BaseSchedulerNode) -> bool:
             # only fused nodes can introduce new ancestors.
@@ -2379,8 +2390,14 @@ class Scheduler:
                     )
             return False
 
-        combined_names = node1.get_operation_names() | node2.get_operation_names()
-        combined_ancestors = (node1.ancestors | node2.ancestors) - combined_names
+        # as above - use slightly faster, unordered set
+        combined_names = (
+            node1.get_operation_names()._dict.keys()
+            | node2.get_operation_names()._dict.keys()
+        )
+        combined_ancestors = (
+            node1.ancestors._dict.keys() | node2.ancestors._dict.keys()
+        ) - combined_names
         cycle = any(found_path(self.name_to_fused_node[n]) for n in combined_ancestors)
         if cycle:
             WhyNoFuse(node1, node2)("will create cycle")
@@ -2592,7 +2609,7 @@ class Scheduler:
         """
         node1_buf_names = node1.get_buffer_names()
         node1_op_names = node1.get_operation_names()
-        computed_deps = set()
+        computed_deps: OrderedSet[Dep] = OrderedSet()
         why = WhyNoFuse(node1, node2)
 
         for cd in node1.read_writes.writes:
@@ -2709,6 +2726,23 @@ class Scheduler:
         The first term in our fusion score that estimates number of saved
         memory operations.
         """
+        node1_dep_len = len(node1.read_writes.reads) + len(node1.read_writes.writes)
+        node2_dep_len = len(node1.read_writes.reads) + len(node2.read_writes.writes)
+
+        # optimization: iter over smaller set
+        if max(node1_dep_len, node2_dep_len) * 4 > min(node1_dep_len, node2_dep_len):
+            if node1_dep_len > node2_dep_len:
+                tmp = node1
+                node1 = node2
+                node2 = tmp
+
+            deps = []
+            for dep in node1.read_writes.reads | node1.read_writes.writes:
+                if dep in node2.read_writes.reads or dep in node2.read_writes.writes:
+                    deps.append(dep)
+
+            return sum(self.dep_size_hint(dep) for dep in deps)
+
         common_memory_deps = (node1.read_writes.reads | node1.read_writes.writes) & (
             node2.read_writes.reads | node2.read_writes.writes
         )
@@ -2760,7 +2794,7 @@ class Scheduler:
         Populate node.last_usage recursively (also for the nodes within a FusedSchedulerNode)
         """
 
-        future_used_buffers = set(V.graph.get_output_names())
+        future_used_buffers: OrderedSet[str] = OrderedSet(V.graph.get_output_names())
 
         for node in reversed(self.nodes):
             node.set_last_usage(future_used_buffers, self.mutation_real_name)
@@ -2790,11 +2824,11 @@ class Scheduler:
         same kernel can be removed.
         """
 
-        fused_node_names = {
+        fused_node_names = OrderedSet(
             self.name_to_buf[buf].defining_op.get_name()
             for buf in V.kernel.store_buffer_names
             if buf in self.name_to_buf
-        }
+        )
         names_to_remove = []
         for out_buf in V.kernel.store_buffer_names:
             if out_buf not in self.name_to_buf:
@@ -2803,7 +2837,7 @@ class Scheduler:
                 continue
             users = self.name_to_buf[out_buf].users
             assert users is not None
-            users = {user.get_name() for user in users if not user.is_weak}
+            users = OrderedSet(user.get_name() for user in users if not user.is_weak)
             if users.issubset(fused_node_names):
                 names_to_remove.append(out_buf)
 
@@ -3002,7 +3036,7 @@ class Scheduler:
 class BaseScheduling:
     @classmethod
     def get_backend_features(cls, device: torch.device) -> Sequence[BackendFeature]:
-        """Return a set of .codegen.common.BackendFeature()"""
+        """Return a OrderedSet of .codegen.common.BackendFeature()"""
         return ()
 
     def can_fuse_vertical(
