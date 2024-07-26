@@ -108,12 +108,14 @@ if TYPE_CHECKING:
     from torch._subclasses.fake_tensor import FakeTensor
     from torch.fx import Node, Proxy
     from .bounds import BoundVars
+    from .codegen.cpp_template import CppTemplate
     from .codegen.cuda.cuda_template import CUDATemplate
     from .graph import GraphLowering
     from .utils import IndentedBuffer
 
 else:
     CUDATemplate: TypeAlias = object
+    CppTemplate: TypeAlias = object
 
 _T = TypeVar("_T")
 _U = TypeVar("_U")
@@ -4125,20 +4127,22 @@ class ChoiceCaller:
     Children classes: TritonTemplateCaller, CUDATemplateCaller.
     """
 
-    def __init__(self, name, input_nodes, layout):
+    def __init__(
+        self, name: str, input_nodes: Sequence[Union[TensorBox, IRNode]], layout: Layout
+    ) -> None:
         super().__init__()
         self.name = name
         self.layout = layout
         self.input_nodes = input_nodes
 
-    def benchmark(self, *args, out) -> float:
+    def benchmark(self, *args: torch.Tensor, out: torch.Tensor) -> float:
         algo = self.to_callable()
         return do_bench(algo, args, {"out": out})
 
     def call_name(self) -> str:
         raise NotImplementedError
 
-    def to_callable(self):
+    def to_callable(self) -> object:
         raise NotImplementedError
 
     def hash_key(self) -> str:
@@ -4168,11 +4172,11 @@ class MultiTemplateBuffer(TritonTemplateBuffer):
 
     def __init__(
         self,
-        layout: Layout,
+        layout: FixedLayout,
         inputs: List[IRNode],
         choice_timings: Callable[[], Dict[ChoiceCaller, float]],
-    ):
-        super().__init__(layout=layout, inputs=inputs, make_kernel_render=None)  # type: ignore[arg-type] # next PR
+    ) -> None:
+        super().__init__(layout=layout, inputs=inputs, make_kernel_render=None)
         self._choice_timings_fn = choice_timings
         self._choice_timings: Optional[Dict[ChoiceCaller, float]] = None
         self.original_inputs = inputs
@@ -4184,7 +4188,7 @@ class MultiTemplateBuffer(TritonTemplateBuffer):
         return self._choice_timings
 
     @contextlib.contextmanager
-    def swap_as_triton_caller(self, caller: TritonTemplateCallerBase):
+    def swap_as_triton_caller(self, caller: TritonTemplateCallerBase):  # type: ignore[no-untyped-def]
         assert isinstance(caller, torch._inductor.select_algorithm.TritonTemplateCaller)
         assert self.layout == caller.layout
 
@@ -4195,10 +4199,12 @@ class MultiTemplateBuffer(TritonTemplateBuffer):
         finally:
             self.make_kernel_render = render
 
-    def finalize_as_triton_caller(self, caller: TritonTemplateCallerBase):
+    def finalize_as_triton_caller(self, caller: TritonTemplateCallerBase) -> None:
         assert isinstance(caller, torch._inductor.select_algorithm.TritonTemplateCaller)
-        assert self.layout.size == caller.layout.size  # type: ignore[union-attr] # next PR
-        assert self.layout.stride == caller.layout.stride  # type: ignore[union-attr] # next PR
+        assert isinstance(self.layout, Layout)
+        assert isinstance(caller.layout, Layout)
+        assert self.layout.size == caller.layout.size
+        assert self.layout.stride == caller.layout.stride
         self.make_kernel_render = caller.get_make_kernel_render()
 
     def get_min_choice(self) -> Tuple[ChoiceCaller, float]:
@@ -4209,23 +4215,30 @@ class MultiTemplateBuffer(TritonTemplateBuffer):
 class CUDATemplateBuffer(TemplateBuffer):
     def __init__(
         self,
-        layout,
-        inputs,
-        make_kernel_render,
+        layout: FixedLayout,
+        inputs: Sequence[Union[TensorBox, IRNode]],
+        make_kernel_render: Callable[[], None],
         workspace_size: int,
         template: CUDATemplate,
-    ):
+    ) -> None:
         super().__init__(layout, inputs, make_kernel_render)
         # Global memory (in bytes) needed for this template.
         self.workspace_size = workspace_size
         self.template = template
 
-    def get_workspace_size(self):
+    def get_workspace_size(self) -> int:
         return self.workspace_size if self.workspace_size is not None else 0
 
 
 class CppTemplateBuffer(TemplateBuffer):
-    def __init__(self, layout, inputs, make_kernel_render, template, choice):
+    def __init__(
+        self,
+        layout: FixedLayout,
+        inputs: Sequence[Union[TensorBox, IRNode]],
+        make_kernel_render: Callable[[], None],
+        template: CppTemplate,  # type: ignore[name-defined] # next PR
+        choice: int,
+    ) -> None:
         super().__init__(layout, inputs, make_kernel_render)
         self.template = template
         self.choice = choice
@@ -5449,11 +5462,11 @@ class MutatingFirstArgExternKernel(ExternKernel):
 
 
 class ResizeStorageBytes(MutatingFirstArgExternKernel):
-    def __init__(self, variable, new_size):
+    def __init__(self, variable: BaseView, new_size: IRNode) -> None:
         assert isinstance(new_size, int), "TODO: dynamic shapes"
         super().__init__(
             None,
-            NoneLayout(variable.get_device()),  # type: ignore[arg-type]
+            NoneLayout(variable.get_device()),
             self.unwrap_storage([variable]),
             constant_args=(new_size,),
         )
@@ -5466,7 +5479,7 @@ class ResizeStorageBytes(MutatingFirstArgExternKernel):
 
 
 class SetSourceTensorKernel(ExternKernelAlloc):
-    def __init__(self, self_tensor, storage_tensor):
+    def __init__(self, self_tensor: ReinterpretView, storage_tensor: IRNode) -> None:
         self_tensor.freeze_layout()
         super().__init__(
             self_tensor.get_layout(),
@@ -5482,7 +5495,7 @@ class SetSourceTensorKernel(ExternKernelAlloc):
             MutationOutput(NoneLayout(device), storage_tensor, self),
         ]
 
-    def get_inputs_that_alias_output(self):
+    def get_inputs_that_alias_output(self) -> Sequence[str]:
         return [self.inputs[0].get_name(), self.inputs[1].get_name()]
 
 
@@ -5493,7 +5506,7 @@ class ScatterFallback(ExternKernel):
     It also handle the case `src` being a scalar properly.
     """
 
-    def codegen(self, wrapper):
+    def codegen(self, wrapper: WrapperCodeGen) -> None:
         reduce = self.kwargs["reduce"]
         if V.graph.cpp_wrapper:
             # Follow aten/src/ATen/native/ReductionType.h:get_operator_enum
@@ -5501,11 +5514,12 @@ class ScatterFallback(ExternKernel):
             if reduce in get_operator_enum:
                 reduce = get_operator_enum[reduce]
 
+        src: object
         if self.src_is_tensor:
             (x, index, src) = (t.codegen_reference() for t in self.inputs)
         else:
             (x, index) = (t.codegen_reference() for t in self.inputs)
-            src = self.constant_args[1]  # type: ignore[assignment] # next PR
+            src = self.constant_args[1]
         wrapper.generate_scatter_fallback(
             x,
             [x, self.constant_args[0], index, src],
@@ -5516,29 +5530,29 @@ class ScatterFallback(ExternKernel):
             self.codegen_kwargs(),
         )
 
-    def should_allocate(self):
+    def should_allocate(self) -> bool:
         return False
 
-    def get_mutation_names(self):
+    def get_mutation_names(self) -> Sequence[str]:
         return [self.inputs[0].get_name()]
 
-    def get_unbacked_symbol_defs(self) -> Set[sympy.Symbol]:
+    def get_unbacked_symbol_defs(self) -> Set[Symbol]:
         return set()
 
     def __init__(
         self,
-        op_overload,
-        x,
+        op_overload: OpOverload,
+        x: IRNode,
         dim: int,
-        index,
-        src,
+        index: TensorBox,
+        src: IRNode,
         *,
         reduce: Optional[str] = None,
         include_self: bool = True,
-    ):
+    ) -> None:
         self.src_is_tensor = isinstance(src, TensorBox)
 
-        constant_args: Tuple[Any, ...]
+        constant_args: Tuple[object, ...]
         if self.src_is_tensor:
             tensors = [self.realize_input(t) for t in [x, index, src]]
             constant_args = (dim,)
@@ -5548,7 +5562,7 @@ class ScatterFallback(ExternKernel):
 
         super().__init__(
             None,
-            NoneLayout(x.get_device()),  # type: ignore[arg-type]
+            NoneLayout(x.get_device()),
             self.unwrap_storage(tensors),
             constant_args,
             {"reduce": reduce, "include_self": include_self},
@@ -5567,7 +5581,7 @@ class IndexPutFallback(ExternKernel):
     This needs to be a custom class to handle mutation and indices properly
     """
 
-    def codegen(self, wrapper):
+    def codegen(self, wrapper: WrapperCodeGen) -> None:
         (x, values, *valid_indices) = (t.codegen_reference() for t in self.inputs)
         indices = []
         iter_valid_indices = iter(valid_indices)
@@ -5581,16 +5595,23 @@ class IndexPutFallback(ExternKernel):
             self.get_kernel_name(), x, indices, values, *self.codegen_const_args()
         )
 
-    def should_allocate(self):
+    def should_allocate(self) -> bool:
         return False
 
-    def get_mutation_names(self):
+    def get_mutation_names(self) -> Sequence[str]:
         return [self.inputs[0].get_name()]
 
-    def get_unbacked_symbol_defs(self) -> Set[sympy.Symbol]:
+    def get_unbacked_symbol_defs(self) -> Set[Symbol]:
         return set()
 
-    def __init__(self, op_overload, x, indices, values, accumulate):
+    def __init__(
+        self,
+        op_overload: OpOverload,
+        x: IRNode,
+        indices: Sequence[Optional[TensorBox]],
+        values: Union[StorageBox, TensorBox, Sequence[IRNode]],
+        accumulate: bool,
+    ) -> None:
         self.indices = indices
         valid_indices = [i for i in indices if i is not None]
         tensors = [self.realize_input(x) for x in [x, values, *valid_indices]]
@@ -5599,7 +5620,7 @@ class IndexPutFallback(ExternKernel):
         )
         super().__init__(
             None,
-            NoneLayout(x.get_device()),  # type: ignore[arg-type]
+            NoneLayout(x.get_device()),
             self.unwrap_storage(tensors),
             (accumulate,),
             python_kernel_name="aten.index_put_",
@@ -5613,7 +5634,7 @@ class IndexPutFallback(ExternKernel):
 
 class DeviceCopy(ExternKernelOut):
     @classmethod
-    def create(cls, x, device):
+    def create(cls, x, device):  # type: ignore[no-untyped-def]
         if (
             not x.is_extern()
             and all(r in V.graph.constants for r in x.get_read_names())
@@ -5634,7 +5655,7 @@ class DeviceCopy(ExternKernelOut):
             [cls.realize_input(x)],
         )
 
-    def codegen(self, wrapper):
+    def codegen(self, wrapper: WrapperCodeGen) -> None:
         args = self.codegen_args()
         assert len(args) == 1
         if self.output_view:
@@ -5648,22 +5669,24 @@ class DynamicScalar(ExternKernel):
     The result of a call to aten._local_scalar_dense.
     """
 
-    def get_reads(self):
-        return ()
+    def get_reads(self) -> Set[Dep]:
+        return set()
 
-    def should_allocate(self):
+    def should_allocate(self) -> bool:
         return False
 
-    def __init__(self, sym, keypath, data):
+    def __init__(self, sym: Symbol, keypath: Sequence[Expr], data: IRNode) -> None:
         data.realize()
-        super().__init__(None, NoneLayout(torch.device("cpu")), self.unwrap_storage([data]))  # type: ignore[arg-type]
+        super().__init__(
+            None, NoneLayout(torch.device("cpu")), self.unwrap_storage([data])
+        )
         self.sym = sym
         self.keypath = keypath
 
-    def get_unbacked_symbol_defs(self) -> Set[sympy.Symbol]:
+    def get_unbacked_symbol_defs(self) -> Set[Symbol]:
         return {self.sym}
 
-    def codegen(self, wrapper):
+    def codegen(self, wrapper: WrapperCodeGen) -> None:
         wrapper.codegen_dynamic_scalar(self)
 
 
@@ -5672,30 +5695,30 @@ class AssertScalar(ExternKernel):
     The result of a call to aten._assert_scalar
     """
 
-    def get_reads(self):
-        return ()
+    def get_reads(self) -> Set[Dep]:
+        return set()
 
-    def should_allocate(self):
+    def should_allocate(self) -> bool:
         return False
 
-    def __init__(self, scalar, msg):
+    def __init__(self, scalar: sympy.Rel, msg: str) -> None:
         super().__init__(
-            # Buffer(name, layotu)
+            # Buffer(name, layout)
             None,
-            NoneLayout(torch.device("cpu")),  # type: ignore[arg-type]
+            NoneLayout(torch.device("cpu")),
             # InputsKernel(inputs)
             [],
-        )  # type: ignore[arg-type]
+        )
         self.scalar = scalar
         self.msg = msg
 
-    def has_side_effects(self):
+    def has_side_effects(self) -> bool:
         return True
 
-    def get_unbacked_symbol_uses(self):
+    def get_unbacked_symbol_uses(self) -> Set[Symbol]:
         return free_unbacked_symbols(self.scalar)
 
-    def codegen(self, wrapper):
+    def codegen(self, wrapper: WrapperCodeGen) -> None:
         if V.graph.cpp_wrapper:
             pass
         else:
@@ -5707,7 +5730,7 @@ class AssertScalar(ExternKernel):
             # true).  But we're code generating the actual runtime assert
             # here!!
             wrapper.writeline(
-                f"if not {V.graph.wrapper_code.codegen_python_sizevar(self.scalar, simplify=False)}:"
+                f"if not {V.graph.wrapper_code.codegen_python_rel(self.scalar, simplify=False)}:"  # type: ignore[attr-defined] # next PR
             )
             wrapper.writeline(f"    raise RuntimeError({repr(self.msg)})")
             # No one should ever use this buffer, but for uniformity
