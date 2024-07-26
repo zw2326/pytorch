@@ -193,6 +193,32 @@ class TestSelectAlgorithm(BaseTestSelectAlgorithm):
     @patches
     @torch.no_grad
     @unittest.skipIf(not TEST_MKL, "Test requires MKL")
+    @parametrize("Mdim", (384,))
+    @parametrize("Kdim", (196,))
+    @parametrize("Ndim", (384, 385))
+    @dtypes(torch.float, torch.bfloat16, torch.half)
+    def test_bmm(self, dtype, Mdim, Kdim, Ndim):
+        bs = 29
+
+        class M(torch.nn.Module):
+            def __init__(self):
+                super().__init__()
+
+            def forward(self, x, y):
+                return x @ y
+
+        counters.clear()
+        u = torch.randn(bs, Mdim, Kdim).to(dtype=dtype)
+        v = torch.randn(bs, Kdim, Ndim).to(dtype=dtype)
+        mod = M().to(dtype=dtype).eval()
+        with verify(dtype) as (atol, rtol):
+            self.common(mod, (u, v), atol=atol, rtol=rtol)
+        self.assertEqual(counters["inductor"]["select_algorithm_autotune"], 1)
+
+    @inductor_config.patch({"freezing": True})
+    @patches
+    @torch.no_grad
+    @unittest.skipIf(not TEST_MKL, "Test requires MKL")
     @parametrize("batch_size", (384,))
     @parametrize("in_features", (196,))
     @parametrize("out_features", (384, 385))
@@ -257,6 +283,73 @@ class TestSelectAlgorithm(BaseTestSelectAlgorithm):
             self.assertEqual(counters["inductor"]["cpp_epilogue_fusion_counter"], 0)
         else:
             self.assertEqual(counters["inductor"]["cpp_epilogue_fusion_counter"], 1)
+
+    @inductor_config.patch({"freezing": True})
+    @patches
+    @torch.no_grad
+    @unittest.skipIf(not TEST_MKL, "Test requires MKL")
+    def test_bmm_self_permute(self):
+        # TODO(frost-intel): Support cpp_bmm when input is a single buffer for A and B
+        dtype = torch.float
+        bs = 4
+        Mdim = 9
+        Kdim = 64
+
+        class M(torch.nn.Module):
+            def __init__(self):
+                super().__init__()
+
+            def forward(self, x):
+                return x @ x.permute(0, 2, 1)
+
+        counters.clear()
+        u = torch.randn(bs, Mdim, Kdim).to(dtype=dtype)
+        mod = M().to(dtype=dtype).eval()
+        with verify(dtype) as (atol, rtol):
+            self.common(mod, (u,), atol=atol, rtol=rtol)
+        self.assertEqual(counters["inductor"]["select_algorithm_autotune"], 0)
+
+    @patches
+    @torch.no_grad
+    @unittest.skipIf(not TEST_MKL, "Test requires MKL")
+    @parametrize("Mdim", (384,))
+    @parametrize("Kdim", (196,))
+    @parametrize("Ndim", (384, 385))
+    @parametrize(
+        "epilogue",
+        (
+            "relu",
+            "gelu",
+            "silu",
+            "sigmoid",
+            "tanh",
+            "hardswish",
+            "hardsigmoid",
+            "leaky_relu",
+            "hardtanh",
+        ),
+    )
+    @dtypes(torch.float32, torch.bfloat16, torch.half)
+    def test_bmm_with_pointwise(self, Mdim, Kdim, Ndim, epilogue, dtype):
+        bs = 29
+
+        class M(torch.nn.Module):
+            def __init__(self, epilogue, other):
+                super().__init__()
+                self.epilogue = _get_epilogue(epilogue, other)
+
+            def forward(self, x, w):
+                return self.epilogue(x @ w)
+
+        counters.clear()
+        x = torch.randn(bs, Mdim, Kdim).to(dtype=dtype)
+        w = torch.randn(bs, Kdim, Ndim).to(dtype=dtype)
+        other = torch.randn(bs, Mdim, Ndim).to(dtype=dtype)
+        mod = M(epilogue, other).to(dtype=dtype).eval()
+        with verify(dtype) as (atol, rtol):
+            self.common(mod, (x, w), atol=atol, rtol=rtol)
+        self.assertEqual(counters["inductor"]["select_algorithm_autotune"], 1)
+        self.assertEqual(counters["inductor"]["cpp_epilogue_fusion_counter"], 1)
 
     @inductor_config.patch({"freezing": True})
     @patches
@@ -653,6 +746,37 @@ class TestSelectAlgorithmDynamicShapes(_DynamicShapesTestBase):
     test_quantized_linear_amx_dynamic_shapes = (
         TestSelectAlgorithm.test_quantized_linear_amx
     )
+
+    @patches
+    @torch.no_grad
+    @unittest.skipIf(not TEST_MKL, "Test requires MKL")
+    @dtypes(torch.float, torch.bfloat16, torch.half)
+    def test_bmm_with_pointwise_dynamic_shapes(self, dtype):
+        bs = 79
+        Md = 384
+        Kd = 196
+        Nd = 96
+
+        class M(torch.nn.Module):
+            def __init__(self):
+                super().__init__()
+                self.epilogue = torch.nn.ReLU()
+
+            def forward(self, x, other):
+                return self.epilogue(x @ other)
+
+        counters.clear()
+        u = torch.randn(bs, Md, Kd).to(dtype=dtype)
+        v = torch.randn(bs, Kd, Nd).to(dtype=dtype)
+        torch._dynamo.mark_dynamic(u, 0)
+        torch._dynamo.mark_dynamic(u, 1)
+        torch._dynamo.mark_static(u, 2)
+        torch._dynamo.mark_static(v, 2)
+        mod = M().to(dtype=dtype).eval()
+        with verify(dtype) as (atol, rtol):
+            self.common(mod, (u, v), atol=atol, rtol=rtol)
+        self.assertEqual(counters["inductor"]["select_algorithm_autotune"], 1)
+        self.assertEqual(counters["inductor"]["cpp_epilogue_fusion_counter"], 1)
 
 
 instantiate_device_type_tests(TestSelectAlgorithm, globals(), only_for="cpu")

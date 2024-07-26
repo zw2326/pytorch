@@ -23,7 +23,7 @@ from .select_algorithm import (
     ChoiceCaller,
     ExternKernelChoice,
 )
-from .utils import use_aten_gemm_kernels, use_cpp_packed_gemm_template, use_max_autotune
+from .utils import use_aten_gemm_kernels, use_cpp_gemm_template, use_max_autotune
 from .virtualized import ops, V
 
 
@@ -320,7 +320,7 @@ def register_onednn_fusion_ops():
             if use_max_autotune():
                 transposed_w = permute(w, [1, 0])
                 *_, layout, x, transposed_w = mm_args(x, transposed_w, layout=layout)
-                if use_cpp_packed_gemm_template(layout, x, transposed_w):
+                if use_cpp_gemm_template(layout, x, transposed_w):
 
                     def epilogue_creator(buf):
                         return create_epilogue_with_attr(
@@ -385,7 +385,7 @@ def register_onednn_fusion_ops():
                 *_, layout, x, transposed_w, y = mm_args(
                     x, transposed_w, y, layout=layout
                 )
-                if use_cpp_packed_gemm_template(layout, x, transposed_w):
+                if use_cpp_gemm_template(layout, x, transposed_w):
 
                     def epilogue_creator(buf):
                         return create_epilogue_with_attr(buf, attr, other=y)
@@ -678,7 +678,7 @@ def register_onednn_fusion_ops():
                         torch.zeros_like(V.graph.constants[w_zp.get_name()]),
                         V.graph.constants[w_zp.get_name()],
                     )  # We only compensate MatrixB and assume B_zp is 0 to avoid the compensation of MatrixA
-                    and use_cpp_packed_gemm_template(layout, x, packed_weight)
+                    and use_cpp_gemm_template(layout, x, packed_weight)
                 ):
                     W_tensor = V.graph.constants[packed_weight.get_name()].to_dense()
                     weight_compens_tensor = torch.sum(W_tensor.to(torch.float), dim=0)
@@ -957,7 +957,7 @@ def register_onednn_fusion_ops():
                         torch.zeros_like(V.graph.constants[w_zp.get_name()]),
                         V.graph.constants[w_zp.get_name()],
                     )  # We only compensate MatrixB and assume B_zp is 0 to avoid the compensation of MatrixA
-                    and use_cpp_packed_gemm_template(layout, x, packed_weight)
+                    and use_cpp_gemm_template(layout, x, packed_weight)
                 ):
                     W_tensor = V.graph.constants[packed_weight.get_name()]
                     W_tensor = W_tensor.to_dense()
@@ -1185,7 +1185,7 @@ def register_onednn_fusion_ops():
                     *_, layout, x, transposed_w = mm_args(
                         x, transposed_w, layout=layout
                     )
-                    if use_cpp_packed_gemm_template(layout, x, transposed_w):
+                    if use_cpp_gemm_template(layout, x, transposed_w):
                         CppPackedGemmTemplate.add_choices(
                             choices,
                             layout,
