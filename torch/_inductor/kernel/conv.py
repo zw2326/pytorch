@@ -476,7 +476,7 @@ def convolution(
         )
 
     out_chan, in_chan, *kernel_shape = V.graph.sizevars.evaluate_static_shapes(
-        weight.get_size()
+        weight.get_size()  # type: ignore[arg-type]
     )
     ndim = len(kernel_shape)
     stride = pad_listlike(stride, ndim)
@@ -553,7 +553,7 @@ def convolution(
         args = [x, weight, bias]
         bias.realize()
         bias.freeze_layout()
-        V.graph.sizevars.evaluate_static_shapes(bias.get_size())
+        V.graph.sizevars.evaluate_static_shapes(bias.get_size())  # type: ignore[arg-type]
     choices = [
         aten_convolution.bind(
             args,
