@@ -127,8 +127,6 @@ OSSProxyExecutor::OSSProxyExecutor(const std::string& json_path, bool is_cpu) {
     device_ = std::make_unique<c10::Device>(c10::DeviceType::CUDA, device_idx);
   }
 
-  std::string extern_kernel_nodes_serialized;
-
   std::ifstream json_file(json_path);
   TORCH_CHECK(json_file.is_open());
 
