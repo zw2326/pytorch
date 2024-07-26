@@ -9,7 +9,7 @@ from torch._inductor.autoheuristic.autoheuristic_utils import (
     AHContext,
     context_add_strides,
 )
-from torch._inductor.codegen.cpp_gemm_template import CppPackedGemmTemplate
+from torch._inductor.codegen.cpp_gemm_template import CppGemmTemplate
 from torch._inductor.virtualized import V
 
 from .. import config as inductor_config
@@ -176,7 +176,7 @@ def tuned_mm(mat1, mat2, *, layout=None):
         CKGemmTemplate.add_ck_gemm_choices(choices, layout, [mat1, mat2])
 
     if use_cpp_gemm_template(layout, mat1, mat2):
-        CppPackedGemmTemplate.add_choices(
+        CppGemmTemplate.add_choices(
             choices,
             layout,
             [mat1, mat2],
@@ -347,7 +347,7 @@ def tuned_addmm(inp, mat1, mat2, *, alpha=1, beta=1, layout=None):
             )
 
     if use_cpp_gemm_template(layout, mat1, mat2):
-        CppPackedGemmTemplate.add_choices(
+        CppGemmTemplate.add_choices(
             choices,
             layout,
             [inp_expanded, mat1, mat2],
