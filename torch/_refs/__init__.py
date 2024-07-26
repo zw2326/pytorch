@@ -284,6 +284,7 @@ __all__ = [
     "stack",
     "swap_axes",  # alias for transpose
     "squeeze",
+    "squeeze_copy",
     "t",
     "t_copy",
     "T",
@@ -6313,6 +6314,7 @@ diagonal_copy = _make_copy_from_view(aten.diagonal)
 # no sparse support. See narrow_copy_sparse in core.
 narrow_copy = _make_copy_from_view(aten.narrow)
 t_copy = _make_copy_from_view(aten.t)
+squeeze_copy = _make_copy_from_view(aten.squeeze)
 view_copy = _make_copy_from_view(aten.view)
 
 
