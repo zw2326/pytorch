@@ -193,13 +193,12 @@ class TestSelectAlgorithm(BaseTestSelectAlgorithm):
     @patches
     @torch.no_grad
     @unittest.skipIf(not TEST_MKL, "Test requires MKL")
+    @parametrize("bs", (1, 99))
     @parametrize("Mdim", (384,))
     @parametrize("Kdim", (196,))
     @parametrize("Ndim", (384, 385))
     @dtypes(torch.float, torch.bfloat16, torch.half)
-    def test_bmm(self, dtype, Mdim, Kdim, Ndim):
-        bs = 29
-
+    def test_bmm(self, dtype, bs, Mdim, Kdim, Ndim):
         class M(torch.nn.Module):
             def __init__(self):
                 super().__init__()
@@ -288,7 +287,11 @@ class TestSelectAlgorithm(BaseTestSelectAlgorithm):
     @patches
     @torch.no_grad
     @unittest.skipIf(not TEST_MKL, "Test requires MKL")
-    def test_bmm_self_permute(self):
+    @parametrize("bs", (1, 99))
+    @parametrize("Mdim", (64,))
+    @parametrize("Kdim", (96,))
+    @dtypes(torch.float, torch.bfloat16, torch.half)
+    def test_bmm_self_permute(self, bs, Mdim, Kdim, dtype):
         # TODO(frost-intel): Support cpp_bmm when input is a single buffer for A and B
         dtype = torch.float
         bs = 4
@@ -312,6 +315,7 @@ class TestSelectAlgorithm(BaseTestSelectAlgorithm):
     @patches
     @torch.no_grad
     @unittest.skipIf(not TEST_MKL, "Test requires MKL")
+    @parametrize("bs", (1, 99))
     @parametrize("Mdim", (384,))
     @parametrize("Kdim", (196,))
     @parametrize("Ndim", (384, 385))
@@ -330,9 +334,7 @@ class TestSelectAlgorithm(BaseTestSelectAlgorithm):
         ),
     )
     @dtypes(torch.float32, torch.bfloat16, torch.half)
-    def test_bmm_with_pointwise(self, Mdim, Kdim, Ndim, epilogue, dtype):
-        bs = 29
-
+    def test_bmm_with_pointwise(self, bs, Mdim, Kdim, Ndim, epilogue, dtype):
         class M(torch.nn.Module):
             def __init__(self, epilogue, other):
                 super().__init__()
@@ -750,13 +752,12 @@ class TestSelectAlgorithmDynamicShapes(_DynamicShapesTestBase):
     @patches
     @torch.no_grad
     @unittest.skipIf(not TEST_MKL, "Test requires MKL")
+    @parametrize("bs", (1, 99))
+    @parametrize("Mdim", (384,))
+    @parametrize("Kdim", (196,))
+    @parametrize("Ndim", (384, 385))
     @dtypes(torch.float, torch.bfloat16, torch.half)
-    def test_bmm_with_pointwise_dynamic_shapes(self, dtype):
-        bs = 79
-        Md = 384
-        Kd = 196
-        Nd = 96
-
+    def test_bmm_with_pointwise_dynamic_shapes(self, bs, Mdim, Kdim, Ndim, dtype):
         class M(torch.nn.Module):
             def __init__(self):
                 super().__init__()
@@ -766,8 +767,8 @@ class TestSelectAlgorithmDynamicShapes(_DynamicShapesTestBase):
                 return self.epilogue(x @ other)
 
         counters.clear()
-        u = torch.randn(bs, Md, Kd).to(dtype=dtype)
-        v = torch.randn(bs, Kd, Nd).to(dtype=dtype)
+        u = torch.randn(bs, Mdim, Kdim).to(dtype=dtype)
+        v = torch.randn(bs, Kdim, Ndim).to(dtype=dtype)
         torch._dynamo.mark_dynamic(u, 0)
         torch._dynamo.mark_dynamic(u, 1)
         torch._dynamo.mark_static(u, 2)

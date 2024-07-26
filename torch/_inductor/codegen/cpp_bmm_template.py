@@ -1,9 +1,8 @@
 # mypy: allow-untyped-defs
 import contextlib
-from typing import Callable, List, Optional
+from typing import Any, Callable, Dict, List, Optional, Tuple
 from unittest.mock import patch
 
-import torch
 from .. import ir, lowering as L
 from ..virtualized import V
 from .cpp_gemm_template import (
@@ -120,29 +119,13 @@ class CppBmmTemplate(CppGemmTemplate):
             new_size = [-1, k, padded_n]
         return new_size, padded_n
 
-    #@classmethod
-    #def prep_weight(cls, inputs, layout_or_out, micro_gemm, block_weight=False):
-    #    if isinstance(inputs[1], ir.IRNode):
-    #        n = inputs[1].get_size()[-1]
-    #    else:
-    #        n = inputs[1].shape[-1]
-    #    _, block_n, _ = micro_gemm.register_blocking
-    #    padded_n = get_padded_n(n, block_n)
-    #    if n != padded_n and micro_gemm.get_b_layout() == LayoutType.NORMAL:
-    #        inputs[1] = cls.pad_weight(inputs[1], padding=padded_n - n)
-    #    elif micro_gemm.get_b_layout() != LayoutType.NORMAL:
-    #        inputs, layout_or_out = CppGemmTemplate.prep_weight(
-    #            inputs, layout_or_out, micro_gemm, block_weight=block_weight
-    #        )
-    #    return inputs, layout_or_out
-
     @staticmethod
     def block_weight_irnode(W, new_size, padding):
         assert isinstance(W, ir.IRNode)
         if not isinstance(W, ir.TensorBox):
             W = ir.TensorBox(W)
         permuted_size = list(new_size)
-        permuted_size[-2], permuted_size[-3] = permuted_size[-3], permuted_size[-2] 
+        permuted_size[-2], permuted_size[-3] = permuted_size[-3], permuted_size[-2]
         blocked_w = L.constant_pad_nd(W, (0, padding))
         blocked_w = L.permute(
             L.view(blocked_w, permuted_size),
@@ -152,7 +135,7 @@ class CppBmmTemplate(CppGemmTemplate):
 
     @staticmethod
     def pack_vnni_weight_irnode(W, micro_gemm, new_size):
-        #new_size = [padded_n // block_n, k, block_n]
+        # new_size = [-1, padded_n // block_n, k, block_n]
         # TODO: (frost-intel): For non-constant packed weights, do this VNNI conversion at microkernel level
         k = new_size[-2]
         if not isinstance(W, ir.TensorBox):
@@ -163,7 +146,7 @@ class CppBmmTemplate(CppGemmTemplate):
             vnni_view_size[-2] = k // vnni_size
             vnni_view_size.insert(-1, vnni_size)
             W = L.view(
-                L.permute(L.view(W,vnni_view_size), [0, 1, 2, 4, 3]),
+                L.permute(L.view(W, vnni_view_size), [0, 1, 2, 4, 3]),
                 new_size,
             )
             W = CppBmmTemplate.realize_permuted_irnode(W)
@@ -178,7 +161,13 @@ class CppBmmTemplate(CppGemmTemplate):
 
         return [reindexer]
 
-    def get_options(self, kernel, template_buffer_node, epilogue_nodes, **kwargs):
+    def get_options(
+        self,
+        kernel: CppTemplateKernel,
+        template_buffer_node: Optional[ir.CppTemplateBuffer] = None,
+        epilogue_nodes: Optional[List[ir.IRNode]] = None,
+        **kwargs,
+    ) -> Tuple[Dict[str, Any], List[ir.Buffer]]:
         options, fake_buffers = super().get_options(
             kernel, template_buffer_node, epilogue_nodes, **kwargs
         )
@@ -193,7 +182,7 @@ class CppBmmTemplate(CppGemmTemplate):
             options[kword + "_dtype"] = DTYPE_TO_CPP[options[kword].dtype]
         return options, fake_buffers
 
-    def render(  # type: ignore[override]
+    def render(  # type: ignore[override, return]
         self,
         kernel: CppTemplateKernel,
         template_buffer_node: Optional[ir.CppTemplateBuffer] = None,

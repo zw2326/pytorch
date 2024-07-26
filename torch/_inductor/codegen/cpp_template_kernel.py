@@ -51,7 +51,7 @@ class CppTemplateKernel(CppKernel):
         inputs: Dict[str, ir.Buffer],
         outputs: Dict[str, ir.Buffer],
         aliases: Optional[Dict[str, str]] = None,
-    ) -> str:
+    ):
         for name, inp in inputs.items():
             if inp is not None:
                 self.args.input_buffers[inp.get_name()] = name
@@ -68,7 +68,7 @@ class CppTemplateKernel(CppKernel):
         self,
         inputs: Dict[str, ir.Buffer],
         outputs: Dict[str, ir.Buffer],
-        aliases: Optional[List[Tuple[ir.Buffer, ir.Buffer]]] = None,
+        aliases: Optional[Dict[str, str]] = None,
     ) -> str:
         self.set_args(inputs, outputs, aliases)
         unique_sizevars = {
