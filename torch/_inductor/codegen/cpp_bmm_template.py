@@ -17,30 +17,24 @@ from .cpp_template_kernel import CppTemplateKernel
 from .cpp_utils import DTYPE_TO_CPP, GemmBlocking
 
 GEMM_SINGLE_THREAD_MM_STUB = r"""
-void single_thread_mm(
-    const {{X_dtype}}* X,
-    const {{W_dtype}}* W,
-    {{Y_dtype}}* Y
-    {%- if is_dynamic_M %},
-    const int64_t {{kernel.size(GemmOut, -2, unwrapped=True)}}
-    {%- endif %}
-)
-"""
+{{kernel.def_function_with_name(
+    function_name="single_thread_mm",
+    placeholder="<SINGLE_THREAD_MM>",
+    inputs={"X": X, "W": W},
+    outputs={"Y": Y},
+    aliases=aliases)}}"""
 
 GEMM_THREADED_MM_STUB = r"""
-void threaded_mm(
-    const {{X_dtype}}* X,
-    const {{W_dtype}}* W,
-    {{Y_dtype}}* Y
-    {%- if is_dynamic_M %},
-    const int64_t {{kernel.size(GemmOut, -2, unwrapped=True)}}
-    {%- endif %}
-)
-"""
+{{kernel.def_function_with_name(
+    function_name="threaded_mm",
+    placeholder="<THREADED_MM>",
+    inputs={"X": X, "W": W},
+    outputs={"Y": Y},
+    aliases=aliases)}}"""
 
 BMM_WRAPPER = r"""
 extern "C"
-{{kernel.def_kernel(inputs={"BX": BX, "BW": BW}, outputs={"BY": BY}, aliases=aliases)}}
+{{kernel.def_kernel(inputs={"X": BX, "W": BW}, outputs={"Y": BY}, aliases=aliases)}}
 {
     const int64_t B = {{kernel.size(BY, -3, unwrapped=True)}};
     {%- if num_threads > 1 %}
@@ -52,32 +46,20 @@ extern "C"
     int64_t B_single_thread_block = B;
     {%- endif %}
     for (int64_t b_start = 0; b_start < B_single_thread_block; ++b_start) {
-        single_thread_mm(
-            &{{kernel.index(BX, ["b_start", 0, 0])}},
-            {%- if template.should_block_weights %}
-            &{{kernel.index(BW, ["b_start", 0, 0, 0])}},
-            {%- else %}
-            &{{kernel.index(BW, ["b_start", 0, 0])}},
-            {%- endif %}
-            &{{kernel.index(BY, ["b_start", 0, 0])}}
-            {%- if is_dynamic_M %},
-            {{kernel.size(GemmOut, -2)}}
-            {%- endif %}
-        );
+        {{kernel.get_function_call(
+            "single_thread_mm",
+            "<SINGLE_THREAD_CALL>",
+            indexer_dims=["b_start", 0, 0],
+            nodes=[BX,BW,BY],
+        )}}
     }
     for (int64_t b_start = B_single_thread_block; b_start < B; ++b_start) {
-        threaded_mm(
-            &{{kernel.index(BX, ["b_start", 0, 0])}},
-            {%- if template.should_block_weights %}
-            &{{kernel.index(BW, ["b_start", 0, 0, 0])}},
-            {%- else %}
-            &{{kernel.index(BW, ["b_start", 0, 0])}},
-            {%- endif %}
-            &{{kernel.index(BY, ["b_start", 0, 0])}}
-            {%- if is_dynamic_M %},
-            {{kernel.size(GemmOut, -2)}}
-            {%- endif %}
-        );
+        {{kernel.get_function_call(
+            "threaded_mm",
+            "<THREADED_MM_CALL>",
+            indexer_dims=["b_start", 0, 0],
+            nodes=[BX,BW,BY],
+        )}}
     }
 }
 """
@@ -192,16 +174,12 @@ class CppBmmTemplate(CppGemmTemplate):
         options, fake_buffers = self.get_options(
             kernel, template_buffer_node, epilogue_nodes, **kwargs
         )
-        BX, BW, BY = options["BX"], options["BW"], options["BY"]
-        X, W, Y = options["X"], options["W"], options["Y"]
-        aliases = options["aliases"]
 
         with contextlib.ExitStack() as stack:
             for buf in fake_buffers:
                 stack.enter_context(
                     patch.object(V.graph, "get_dtype", self._fake_get_dtype(buf))
                 )
-            kernel.set_args(inputs={"X": X, "W": W}, outputs={"Y": Y}, aliases=aliases)
             result = self._template_from_string(MICROKERNEL_DEF).render(**options)
             result += self._template_from_string(
                 GEMM_THREADED_MM_STUB + GEMM_TEMPLATE
@@ -209,8 +187,5 @@ class CppBmmTemplate(CppGemmTemplate):
             result += self._template_from_string(
                 GEMM_SINGLE_THREAD_MM_STUB + GEMM_TEMPLATE
             ).render(**{**options, "num_threads": 1})
-            kernel.set_args(
-                inputs={"BX": BX, "BW": BW}, outputs={"BY": BY}, aliases=aliases
-            )
             result += self._template_from_string(BMM_WRAPPER).render(**options)
             return result

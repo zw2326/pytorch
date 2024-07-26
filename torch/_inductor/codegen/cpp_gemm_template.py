@@ -555,7 +555,7 @@ class CppGemmTemplate(CppTemplate):
             return cls.prep_weight(
                 normalize_shapes(maybe_to_dense(reorder_and_filter(inputs))),
                 micro_gemm,
-            )
+            ), layout
 
         def postprocessor(output):
             if isinstance(output, ir.TensorBox):

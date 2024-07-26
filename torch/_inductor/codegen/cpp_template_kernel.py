@@ -46,8 +46,10 @@ class CppTemplateKernel(CppKernel):
             template.render(kernel=self, **kwargs), self.render_hooks
         ).finalize_all()
 
-    def set_args(
+    def def_function_with_name(
         self,
+        function_name: str,
+        placeholder: str,
         inputs: Dict[str, ir.Buffer],
         outputs: Dict[str, ir.Buffer],
         aliases: Optional[Dict[str, str]] = None,
@@ -64,13 +66,6 @@ class CppTemplateKernel(CppKernel):
                 if orig in self.args.output_buffers:
                     self.args.output_buffers[alias] = self.args.output_buffers[orig]
 
-    def def_kernel(
-        self,
-        inputs: Dict[str, ir.Buffer],
-        outputs: Dict[str, ir.Buffer],
-        aliases: Optional[Dict[str, str]] = None,
-    ) -> str:
-        self.set_args(inputs, outputs, aliases)
         unique_sizevars = {
             s
             for input in inputs.values()
@@ -99,9 +94,40 @@ class CppTemplateKernel(CppKernel):
                     if alias in self.args.output_buffers:
                         self.args.output_buffers[alias] = "REMOVED"
             cpp_argdefs, _, _ = self.args.cpp_argdefs()
-            return f"void {self.kernel_name}({', '.join(cpp_argdefs)})"
+            return f"void {function_name}({', '.join(cpp_argdefs)})"
 
+        assert placeholder not in self.render_hooks
+        self.render_hooks[placeholder] = hook
+        return placeholder
+
+    def def_kernel(
+        self,
+        inputs: Dict[str, ir.Buffer],
+        outputs: Dict[str, ir.Buffer],
+        aliases: Optional[Dict[str, str]] = None,
+    ) -> str:
         placeholder = "<DEF_KERNEL>"
+        return self.def_function_with_name(self.kernel_name, placeholder, inputs, outputs, aliases)
+
+    def get_function_call(self, function_name: str, placeholder: str, indexer_dims: List[Any]=[], nodes=None) -> str:
+        node_names = [node.get_name() for node in nodes]
+        def hook():
+            call_args, buffer_names, _, _ = self.args.python_argdefs()
+            indexed_params = []
+            for arg, buf in zip(call_args, buffer_names):
+                if len(indexer_dims) > 0 and buf in node_names:
+                    node = nodes[node_names.index(buf)]
+                    if len(indexer_dims) < len(node.shape):
+                        ind_dims = indexer_dims + [0]*(len(node.shape) - len(indexer_dims))
+                    else:
+                        ind_dims = indexer_dims
+                    indexed_arg = self.index(node, ind_dims)
+                    indexed_arg = indexed_arg.split('[')[1]
+                    arg = f"&({arg}[{indexed_arg})"
+                indexed_params.append(arg)
+            params = ", ".join(indexed_params)
+            return f"{function_name}({params});"
+
         assert placeholder not in self.render_hooks
         self.render_hooks[placeholder] = hook
         return placeholder
