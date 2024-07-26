@@ -57,6 +57,27 @@ class WrapWithSetGradEnabled(HigherOrderOperator):
 wrap_with_set_grad_enabled = WrapWithSetGradEnabled()
 
 
+class WrapWithAutocast(HigherOrderOperator):
+    def __init__(self):
+        super().__init__("wrap_with_autocast")
+
+    def __call__(self, autocast_args, wrapped_func, *args, **kwargs):
+        # Dynamo already traces the body of HigherOrderOp beforehand when it
+        # so no need to trace into it.
+        import torch._dynamo  # noqa: F401
+        from torch._dynamo import disable
+
+        @disable
+        def wrapper():
+            with torch.autocast(*autocast_args):
+                return wrapped_func(*args, **kwargs)
+
+        return wrapper()
+
+
+wrap_with_autocast = WrapWithAutocast()
+
+
 class WrapActivationCheckpoint(HigherOrderOperator):
     """
     This operator is used to wrap torch.utils.checkpoint. This avoids
