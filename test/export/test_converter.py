@@ -102,7 +102,6 @@ class TestConverter(TestCase):
             else:
                 raise RuntimeError(f"Unrecognized mode for torch.jit: {opt}")
 
-            print(opt, ts_model.graph)
             ep = TS2EPConverter(ts_model, inp).convert()
             ep_list.append(ep)
 
@@ -989,6 +988,7 @@ class TestConverter(TestCase):
 
         ep_list = self._check_equal_ts_ep_converter(M(), (torch.tensor(1),))
         for ep in ep_list:
+            print(ep.constants)
             self.assertEqual(len(ep.constants), 1)
 
     def test_aten_tensor_prim_dtype(self):
