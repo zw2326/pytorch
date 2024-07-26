@@ -788,6 +788,9 @@ class GraphLowering(torch.fx.Interpreter):
         assert name in self.allocated_constant_name and name in self.constants, (
             "Can not find the original value for " + name
         )
+        if self.allocated_constant_name[name] is None:
+            print("debug gm:")
+            print(V.graph.orig_gm.print_readable())
         orig_name = get_cloned_parameter_buffer_name(self.allocated_constant_name[name])
         return (
             self.module.meta[orig_name]
@@ -834,6 +837,8 @@ class GraphLowering(torch.fx.Interpreter):
         return name
 
     def add_tensor_constant(self, data, name=None):
+        if name is None:
+            print("debug data: ", data)
         new_name = self.allocate_non_dup_const_name(name, data)
         return TensorBox.create(
             ir.ConstantBuffer(
