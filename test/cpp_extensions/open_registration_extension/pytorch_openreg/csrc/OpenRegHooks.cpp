@@ -11,10 +11,6 @@ namespace {
 // Python dictionary where real implementations can be found
 PyObject* py_registry;
 
-py::function get_method(const char* name) {
-    return  py::cast<py::dict>(py_registry)[name];
-}
-
 // C++ hooks implementation
 struct OpenRegHooksArgs : public at::PrivateUse1HooksArgs {};
 
@@ -22,9 +18,9 @@ struct OpenRegHooksInterface : public at::PrivateUse1HooksInterface {
     OpenRegHooksInterface(OpenRegHooksArgs) {};
     ~OpenRegHooksInterface() override = default;
 
-  	bool hasPrimaryContext(c10::DeviceIndex device_index) const override {
-  		return get_method("hasPrimaryContext")(device_index).cast<bool>();
-  	}
+      bool hasPrimaryContext(c10::DeviceIndex device_index) const override {
+          return get_method("hasPrimaryContext")(device_index).cast<bool>();
+      }
 };
 
 TORCH_DECLARE_REGISTRY(PrivateUse1HooksRegistry, OpenRegHooksInterface, OpenRegHooksArgs);
@@ -242,5 +238,13 @@ C10_REGISTER_GUARD_IMPL(PrivateUse1, OpenRegGuardImpl);
 // Setter for the python dictionary with implementations
 void set_impl_registry(PyObject* registry) {
     py_registry = registry;
+}
+
+py::function get_method(const char* name) {
+    auto dict = py::cast<py::dict>(py_registry);
+    TORCH_CHECK(dict.contains(name), "OpenReg registry does not contain ",
+        "an implementation for '", name, "' make sure to add it in the __init__.py "
+        "file and register it.")
+    return dict[name];
 }
 } // openreg
