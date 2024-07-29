@@ -642,6 +642,8 @@ class TORCH_API ProcessGroupNCCL : public Backend {
 
   void performNocolorSplit(at::Device device);
 
+  void extendTimeoutUntilFirstDone(const std::chrono::milliseconds& timeout);
+
  protected:
   // Helper that broadcasts nccl unique ID to all ranks through the store
   void broadcastUniqueNCCLID(
@@ -801,6 +803,11 @@ class TORCH_API ProcessGroupNCCL : public Backend {
   // Returns the global ranks of a PG.
   const std::vector<uint64_t>& groupRanks() const;
 
+  // Util function to assign timeout to each work.
+  void assignTimeoutToWork(
+      c10::intrusive_ptr<ProcessGroupNCCL::WorkNCCL> work,
+      c10::intrusive_ptr<Options> option);
+
  protected:
   // Function that runs as part of a separate thread aside from watchdog
   // thread because we need to check the heartbeat from watchdog thread
@@ -838,6 +845,17 @@ class TORCH_API ProcessGroupNCCL : public Backend {
   c10::intrusive_ptr<Store> globalStore_;
 
   bool storeError_{false};
+
+  // The lock which protects the write/read of extendedTimeout_
+  std::mutex mtxTimeoutExtension_;
+
+  // The extended timeout on top of existing timeout for works issued before
+  // first work finishes.
+  std::chrono::milliseconds extendedTimeout_ = std::chrono::milliseconds(0);
+
+  // Record of first work and will get reset if timeout is further extended.
+  c10::intrusive_ptr<ProcessGroupNCCL::WorkNCCL> firstWorkSinceExtended_ =
+      nullptr;
 
   const c10::intrusive_ptr<Options> options_;
 

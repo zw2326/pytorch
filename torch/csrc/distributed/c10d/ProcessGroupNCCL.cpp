@@ -1602,6 +1602,15 @@ const std::vector<uint64_t>& ProcessGroupNCCL::groupRanks() const {
   return options_->global_ranks_in_group;
 }
 
+void ProcessGroupNCCL::extendTimeoutUntilFirstDone(
+    const std::chrono::milliseconds& timeout) {
+  std::unique_lock<std::mutex> lock(mtxTimeoutExtension_);
+  extendedTimeout_ += timeout;
+  if (firstWorkSinceExtended_ != nullptr) {
+    firstWorkSinceExtended_ = nullptr;
+  }
+}
+
 void ProcessGroupNCCL::watchdogHandler() {
   bool done = false;
   lastWorkListUpdateTime_ = std::chrono::steady_clock::now();
@@ -1777,6 +1786,15 @@ void ProcessGroupNCCL::watchdogHandler() {
 
       // Clean up completed work
       if (work.isCompleted()) {
+        {
+          // Reset the timeout and first work if the work is completed.
+          std::unique_lock<std::mutex> lock(mtxTimeoutExtension_);
+          if (firstWorkSinceExtended_ != nullptr &&
+              firstWorkSinceExtended_.get() == &work) {
+            firstWorkSinceExtended_ = nullptr;
+            extendedTimeout_ = std::chrono::milliseconds(0);
+          }
+        }
         pgStatus_->lastCompletedSeq = work.seq_;
         pgStatus_->lastCompletedWorkName = opTypeToString(work.opType_);
         pgStatus_->lastCompletedNumelIn = work.numelIn_;
@@ -2409,6 +2427,20 @@ uint64_t ProcessGroupNCCL::WorkNCCL::getSequencenumber() const {
   return seq_;
 }
 
+void ProcessGroupNCCL::assignTimeoutToWork(
+    c10::intrusive_ptr<ProcessGroupNCCL::WorkNCCL> work,
+    c10::intrusive_ptr<ProcessGroupNCCL::Options> option) {
+  std::chrono::milliseconds timeout = option->timeout;
+  std::unique_lock<std::mutex> lock(mtxTimeoutExtension_);
+  if (extendedTimeout_.count() > 0) {
+    timeout += extendedTimeout_;
+  }
+  work->opTimeout_ = timeout;
+  if (firstWorkSinceExtended_ == nullptr) {
+    firstWorkSinceExtended_ = work;
+  }
+}
+
 void ProcessGroupNCCL::workEnqueue(
     c10::intrusive_ptr<ProcessGroupNCCL::WorkNCCL> work) {
   if (!terminateProcessGroup_.load()) {
@@ -2489,8 +2521,8 @@ c10::intrusive_ptr<Work> ProcessGroupNCCL::endCoalescing(OpType optype) {
   work->ncclComm_ = comm;
   work->blockingWait_ = blockingWait_;
   work->avoidRecordStreams_ = avoidRecordStreams_;
-  work->opTimeout_ = options_->timeout;
   work->store_ = store_;
+  assignTimeoutToWork(work, options_);
 
   // Record start before ncclGroupEnd
   if (work->timingEnabled_) {
@@ -2674,8 +2706,8 @@ c10::intrusive_ptr<Work> ProcessGroupNCCL::collective(
   // Set appropriate work parameters.
   work->blockingWait_ = blockingWait_;
   work->avoidRecordStreams_ = avoidRecordStreams;
-  work->opTimeout_ = options_->timeout;
   work->store_ = store_;
+  assignTimeoutToWork(work, options_);
   // Record size info for debug. We only record the size on the first device as
   // multi-device per process is deprecated
   work->numelIn_ = input.numel();
@@ -2847,8 +2879,8 @@ c10::intrusive_ptr<Work> ProcessGroupNCCL::collectiveCoalesced(
   // Set appropriate work parameters.
   work->blockingWait_ = blockingWait_;
   work->avoidRecordStreams_ = avoidRecordStreams;
-  work->opTimeout_ = options_->timeout;
   work->store_ = store_;
+  assignTimeoutToWork(work, options_);
   // Record size info for debug. We only record the size on the first device as
   // multi-device per process is deprecated
   work->numelIn_ = inputs[0].numel();
@@ -3070,8 +3102,8 @@ c10::intrusive_ptr<Work> ProcessGroupNCCL::pointToPoint(
     work->ncclEndEvent_->record(ncclStream);
     work->ncclComm_ = ncclComm;
     work->blockingWait_ = blockingWait_;
-    work->opTimeout_ = options_->timeout;
     work->store_ = store_;
+    assignTimeoutToWork(work, options_);
     // Record size info for debug. We only record the size on the first device
     // as multi-device per process is deprecated
     work->numelIn_ = work->numelOut_ = tensor.numel();
