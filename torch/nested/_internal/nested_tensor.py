@@ -1,10 +1,10 @@
 # mypy: allow-untyped-defs
+import contextlib
 from typing import Tuple
 
 import torch
 from torch._C import DispatchKey, DispatchKeySet
 from torch._prims_common import is_expandable_to
-from torch.fx.experimental.symbolic_shapes import has_free_symbols
 from torch.utils.weak import WeakTensorKeyDictionary
 from typing import *  # noqa: F403
 
@@ -13,13 +13,35 @@ _tensor_symint_registry = WeakTensorKeyDictionary()
 
 
 def get_tensor_symint(tensor, *, coeff=1):
+    from torch._subclasses.fake_tensor import FakeTensor
+    from torch._subclasses.functional_tensor import FunctionalTensor
+
+    if isinstance(tensor, (FakeTensor, FunctionalTensor)):
+        return tensor.get_nested_int(coeff=coeff)
+
     global _tensor_id_counter
+
     tensor_symint = _tensor_symint_registry.get(tensor)
     if tensor_symint is None:
         tensor_symint = torch._C._get_nested_int(_tensor_id_counter, coeff)
         _tensor_id_counter += 1
         _tensor_symint_registry[tensor] = tensor_symint
     return tensor_symint
+
+
+# Utility for testing
+@contextlib.contextmanager
+def branch_nested_state():
+    # Copy the global state for now since we imagine the registry to be small
+    global _tensor_id_counter, _tensor_symint_registry
+    original_tensor_symint_registry = _tensor_symint_registry
+    _tensor_symint_registry = _tensor_symint_registry.copy()
+    original_tensor_id_counter = _tensor_id_counter
+    try:
+        yield
+    finally:
+        _tensor_id_counter = original_tensor_id_counter
+        _tensor_symint_registry = original_tensor_symint_registry
 
 
 # SDPA metadata; max / min seqlens are needed for e.g. flash
@@ -239,6 +261,8 @@ class NestedTensor(torch.Tensor):
 
     @staticmethod
     def __tensor_unflatten__(inner_tensors: Dict, meta, outer_size, outer_stride):
+        from torch._subclasses.fake_tensor import FakeTensor
+
         # inner tensors: _values, _offsets, [_lengths], [_min_seqlen], [_max_seqlen]
         assert len(inner_tensors) >= 2 and len(inner_tensors) <= 5
         values = inner_tensors["_values"]
@@ -252,18 +276,14 @@ class NestedTensor(torch.Tensor):
             metadata_cache["min_seqlen"] = min_seqlen_tensor
         if max_seqlen_tensor is not None:
             metadata_cache["max_seqlen"] = max_seqlen_tensor
-
         ragged_idx = meta["ragged_idx"]
 
-        # Note that we cannot simply check if is_fake(values) because
-        # during aot autograd, FunctionalTensors are not fake but hold
-        # symbolic sizes.
+        # Alternatively, we could make it the caller's responsibility to
+        # cache it. But this heuristic seems simple enough.
         ragged_source = offsets if lengths is None else lengths
-        if has_free_symbols(ragged_source) or has_free_symbols(values):
-            # Associate offsets or lengths (possibly fake, possibly functionalized)
-            # with the ragged_size.
+        if isinstance(ragged_source, FakeTensor):
             ragged_size = outer_size[ragged_idx]
-            _tensor_symint_registry[ragged_source] = ragged_size
+            ragged_source.set_nested_int(ragged_size)
 
         return NestedTensor(
             values,
